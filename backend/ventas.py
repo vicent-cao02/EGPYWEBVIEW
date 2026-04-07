@@ -1,9 +1,8 @@
 # backend/ventas.py
-from typing import  Dict, Optional
+from typing import Dict, Optional
 from datetime import datetime
-from sqlalchemy import text
-from backend.db import engine
-from .productos import  get_product, update_product, increment_stock
+from .db import get_connection
+from .productos import get_product, update_product, increment_stock
 from .logs import registrar_log
 import copy
 import json
@@ -24,7 +23,9 @@ def register_sale(cliente_id, total, pagado, usuario, tipo_pago, productos=None)
 
     productos_data = []
 
-    with engine.begin() as conn:
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
 
         # ----------------------------
         # Procesar productos
@@ -67,24 +68,15 @@ def register_sale(cliente_id, total, pagado, usuario, tipo_pago, productos=None)
         # ----------------------------
         # Insertar venta
         # ----------------------------
-        query_venta = text("""
+        cursor.execute("""
             INSERT INTO ventas 
             (cliente_id, total, pagado, saldo, usuario, tipo_pago, fecha, productos_vendidos)
             VALUES 
-            (:cliente_id, :total, :pagado, :saldo, :usuario, :tipo_pago, :fecha, :productos_vendidos)
-            RETURNING id
-        """)
-
-        venta_id = conn.execute(query_venta, {
-            "cliente_id": cliente_id,
-            "total": total,
-            "pagado": pagado,
-            "saldo": saldo,
-            "usuario": usuario,
-            "tipo_pago": tipo_pago,
-            "fecha": fecha,
-            "productos_vendidos": json.dumps(productos_data)
-        }).scalar()
+            (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (cliente_id, total, pagado, saldo, usuario, tipo_pago, fecha, json.dumps(productos_data)))
+        conn.commit()
+        
+        venta_id = cursor.lastrowid
 
         # ----------------------------
         # Registrar log
@@ -100,6 +92,9 @@ def register_sale(cliente_id, total, pagado, usuario, tipo_pago, productos=None)
                 "saldo": saldo
             }
         )
+
+    finally:
+        conn.close()
 
     return {
         "id": venta_id,
@@ -123,80 +118,107 @@ def editar_venta_extra(
     chapa: Optional[str] = None,
     usuario: Optional[str] = None
 ):
-    with engine.begin() as conn:
-        update_query = text("""
-            UPDATE ventas
-            SET observaciones = COALESCE(:observaciones, observaciones),
-                vendedor = COALESCE(:vendedor, vendedor),
-                telefono_vendedor = COALESCE(:telefono_vendedor, telefono_vendedor),
-                chofer = COALESCE(:chofer, chofer),
-                chapa = COALESCE(:chapa, chapa)
-            WHERE id = :id
-            RETURNING *
-        """)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        
+        # Construir UPDATE dinámico
+        updates = []
+        values = []
+        
+        if observaciones is not None:
+            updates.append("observaciones = ?")
+            values.append(observaciones)
+        if vendedor is not None:
+            updates.append("vendedor = ?")
+            values.append(vendedor)
+        if telefono_vendedor is not None:
+            updates.append("telefono_vendedor = ?")
+            values.append(telefono_vendedor)
+        if chofer is not None:
+            updates.append("chofer = ?")
+            values.append(chofer)
+        if chapa is not None:
+            updates.append("chapa = ?")
+            values.append(chapa)
+        
+        if not updates:
+            return None
+        
+        values.append(sale_id)
+        
+        query = f"UPDATE ventas SET {', '.join(updates)} WHERE id = ?"
+        cursor.execute(query, values)
+        conn.commit()
 
-        updated = conn.execute(update_query, {
-            "id": sale_id,
-            "observaciones": observaciones,
-            "vendedor": vendedor,
-            "telefono_vendedor": telefono_vendedor,
-            "chofer": chofer,
-            "chapa": chapa
-        }).mappings().first()
+        # Obtener la venta actualizada
+        cursor.execute("SELECT * FROM ventas WHERE id = ?", (sale_id,))
+        updated = cursor.fetchone()
 
         if updated:
-            registrar_log(usuario or "sistema", "editar_venta_extra", dict(updated))
-            return dict(updated)
+            updated_dict = dict(updated)
+            registrar_log(usuario or "sistema", "editar_venta_extra", updated_dict)
+            return updated_dict
 
-    return None
+        return None
+    finally:
+        conn.close()
 
 
 # ----------------------------
 # Listar ventas
 # ----------------------------
 def list_sales():
-    query = text("SELECT * FROM ventas ORDER BY fecha DESC")
-    with engine.connect() as conn:
-        resultados = conn.execute(query).mappings().all()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM ventas ORDER BY fecha DESC")
+        resultados = cursor.fetchall()
 
-    ventas_list = []
-    for r in resultados:
-        productos_vendidos = r.get("productos_vendidos") or "[]"
-        if isinstance(productos_vendidos, str):
-            try:
-                productos_vendidos = json.loads(productos_vendidos)
-            except json.JSONDecodeError:
-                productos_vendidos = []
+        ventas_list = []
+        for r in resultados:
+            r_dict = dict(r)
+            productos_vendidos = r_dict.get("productos_vendidos") or "[]"
+            if isinstance(productos_vendidos, str):
+                try:
+                    productos_vendidos = json.loads(productos_vendidos)
+                except json.JSONDecodeError:
+                    productos_vendidos = []
 
-        r_dict = dict(r)
-        r_dict["productos_vendidos"] = productos_vendidos
-        ventas_list.append(r_dict)
+            r_dict["productos_vendidos"] = productos_vendidos
+            ventas_list.append(r_dict)
 
-    return ventas_list
+        return ventas_list
+    finally:
+        conn.close()
 
 def get_sale(sale_id: str) -> Optional[Dict]:
     """Devuelve una venta por su ID"""
-    query = text("SELECT * FROM ventas WHERE id = :id")
-    with engine.connect() as conn:
-        result = conn.execute(query, {"id": sale_id}).mappings().first()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM ventas WHERE id = ?", (sale_id,))
+        result = cursor.fetchone()
 
-    if result:
-        r = dict(result)
-        productos = r.get("productos_vendidos")
+        if result:
+            r = dict(result)
+            productos = r.get("productos_vendidos")
 
-        # ✅ Solo hacer json.loads si es string
-        if isinstance(productos, str):
-            try:
-                r["productos_vendidos"] = json.loads(productos)
-            except json.JSONDecodeError:
-                r["productos_vendidos"] = []
-        else:
-            # Si ya es lista/dict, dejarlo como está
-            r["productos_vendidos"] = productos or []
+            # ✅ Solo hacer json.loads si es string
+            if isinstance(productos, str):
+                try:
+                    r["productos_vendidos"] = json.loads(productos)
+                except json.JSONDecodeError:
+                    r["productos_vendidos"] = []
+            else:
+                # Si ya es lista/dict, dejarlo como está
+                r["productos_vendidos"] = productos or []
 
-        return r
+            return r
 
-    return None
+        return None
+    finally:
+        conn.close()
 
 def delete_sale(sale_id: str, usuario: Optional[str] = None) -> bool:
     """Elimina una venta por su ID y devuelve productos al stock"""
@@ -209,8 +231,13 @@ def delete_sale(sale_id: str, usuario: Optional[str] = None) -> bool:
         increment_stock(item["id_producto"], item["cantidad"])
 
     # Eliminar la venta de la BD
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM ventas WHERE id = :id"), {"id": sale_id})
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ventas WHERE id = ?", (sale_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
     # 🔹 Preparar datos para el log sin que falle JSON
     log_detalles = copy.deepcopy(sale)

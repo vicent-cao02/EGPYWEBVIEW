@@ -1,10 +1,10 @@
 import streamlit as st
-from sqlalchemy.exc import OperationalError
+import sqlite3
 from backend.errors import AppError, DatabaseConnectionError
 
 
 def handle_app_error(e: Exception):
-    if isinstance(e, (OperationalError, DatabaseConnectionError)):
+    if isinstance(e, (sqlite3.OperationalError, sqlite3.DatabaseError, DatabaseConnectionError)):
         st.error("❌ Error 404 – Sin conexión con la base de datos")
         st.info("📡 No se pudo conectar al servidor de datos. Intenta más tarde.")
         st.stop()

@@ -1,9 +1,5 @@
 # Permite importar módulos desde backend
-<<<<<<< Updated upstream
-# from .db import engine, MetaData  # Removed as now using SQLite directly
-=======
 from .db import get_connection
->>>>>>> Stashed changes
 
 from .usuarios import (
     crear_usuario, autenticar_usuario, cambiar_password,

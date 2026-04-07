@@ -1,23 +1,31 @@
 # backend/productos.py
-from typing import List, Dict, Any
-from sqlalchemy import text
-from .db import engine
+from typing import List, Dict, Any, Optional
+from .db import get_connection
 from .logs import registrar_log
-from typing import Optional
 
 
 # ---------------------------
 # LISTAR PRODUCTOS
 # ---------------------------
 def list_products() -> List[Dict[str, Any]]:
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT * FROM productos ORDER BY nombre"))
-        return [dict(r._mapping) for r in result]
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM productos ORDER BY nombre")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 def map_productos() -> Dict[str, str]:
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT id, nombre FROM productos"))
-        return {row["id"]: row["nombre"] for row in result.mappings()}
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, nombre FROM productos")
+        rows = cursor.fetchall()
+        return {row["id"]: row["nombre"] for row in rows}
+    finally:
+        conn.close()
 # ---------------------------
 # AGREGAR PRODUCTO
 # ---------------------------
@@ -36,27 +44,26 @@ def guardar_producto(
     if not nombre:
         raise ValueError("El nombre del producto no puede estar vacío.")
 
-    with engine.begin() as conn:
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        
         # Verificar si ya existe un producto con ese nombre
-        select_query = text("SELECT * FROM productos WHERE nombre = :nombre")
-        existing = conn.execute(select_query, {"nombre": nombre}).mappings().fetchone()
+        cursor.execute("SELECT * FROM productos WHERE nombre = ?", (nombre,))
+        existing = cursor.fetchone()
 
         if existing:
             # Editar producto existente
-            update_query = text("""
+            cursor.execute("""
                 UPDATE productos
-                SET precio = :precio,
-                    cantidad = :cantidad,
-                    categoria_id = :categoria_id
-                WHERE id = :id
-                RETURNING *
-            """)
-            updated = conn.execute(update_query, {
-                "precio": precio,
-                "cantidad": cantidad,
-                "categoria_id": categoria_id,
-                "id": existing["id"]
-            }).mappings().fetchone()
+                SET precio = ?, cantidad = ?, categoria_id = ?
+                WHERE id = ?
+            """, (precio, cantidad, categoria_id, existing["id"]))
+            conn.commit()
+
+            # Obtener el producto actualizado
+            cursor.execute("SELECT * FROM productos WHERE id = ?", (existing["id"],))
+            updated = dict(cursor.fetchone())
 
             registrar_log(usuario or "sistema", "editar_producto", {
                 "id": updated["id"],
@@ -66,21 +73,19 @@ def guardar_producto(
                 "categoria_id": categoria_id
             })
 
-            return dict(updated)
+            return updated
 
         else:
             # Crear nuevo producto
-            insert_query = text("""
+            cursor.execute("""
                 INSERT INTO productos (nombre, precio, cantidad, categoria_id)
-                VALUES (:nombre, :precio, :cantidad, :categoria_id)
-                RETURNING *
-            """)
-            new_prod = conn.execute(insert_query, {
-                "nombre": nombre,
-                "precio": precio,
-                "cantidad": cantidad,
-                "categoria_id": categoria_id
-            }).mappings().fetchone()
+                VALUES (?, ?, ?, ?)
+            """, (nombre, precio, cantidad, categoria_id))
+            conn.commit()
+
+            # Obtener el producto creado
+            cursor.execute("SELECT * FROM productos WHERE id = last_insert_rowid()")
+            new_prod = dict(cursor.fetchone())
 
             registrar_log(usuario or "sistema", "crear_producto", {
                 "id": new_prod["id"],
@@ -90,7 +95,11 @@ def guardar_producto(
                 "categoria_id": categoria_id
             })
 
-            return dict(new_prod)
+            return new_prod
+            
+    finally:
+        conn.close()
+
         
 # editar producto
 def editar_producto(
@@ -101,23 +110,19 @@ def editar_producto(
     categoria_id: str,
     usuario: Optional[str] = None
 ) -> dict:  
-    with engine.begin() as conn:
-        update_query = text("""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
             UPDATE productos
-            SET nombre = :nombre,
-                precio = :precio,
-                cantidad = :cantidad,
-                categoria_id = :categoria_id
-            WHERE id = :id
-            RETURNING *
-        """)
-        updated = conn.execute(update_query, {
-            "nombre": nombre,
-            "precio": precio,
-            "cantidad": cantidad,
-            "categoria_id": categoria_id,
-            "id": producto_id
-        }).mappings().fetchone()
+            SET nombre = ?, precio = ?, cantidad = ?, categoria_id = ?
+            WHERE id = ?
+        """, (nombre, precio, cantidad, categoria_id, producto_id))
+        conn.commit()
+
+        # Obtener producto actualizado
+        cursor.execute("SELECT * FROM productos WHERE id = ?", (producto_id,))
+        updated = dict(cursor.fetchone())
 
         registrar_log(usuario or "sistema", "editar_producto", {
             "id": updated["id"],
@@ -127,35 +132,43 @@ def editar_producto(
             "categoria_id": categoria_id
         })
 
-        return dict(updated)    
-    
-
+        return updated
+    finally:
+        conn.close()
 
 
 # ---------------------------
 # OBTENER PRODUCTO
 # ---------------------------
 def get_product(producto_id: str) -> Dict[str, Any]:
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT * FROM productos WHERE id = :id"), {"id": producto_id})
-        row = result.first()
-        return dict(row._mapping) if row else None
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM productos WHERE id = ?", (producto_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 # ---------------------------
 # ELIMINAR PRODUCTO
 # ---------------------------
 def delete_product(producto_id: str, usuario: Optional[str] = None) -> bool:
-    with engine.begin() as conn:
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        
         # Obtener el nombre del producto antes de eliminarlo para el log
-        result = conn.execute(text("SELECT nombre FROM productos WHERE id = :id"), {"id": producto_id})
-        row = result.mappings().first()
+        cursor.execute("SELECT nombre FROM productos WHERE id = ?", (producto_id,))
+        row = cursor.fetchone()
         if not row:
             return False  # Producto no encontrado
 
         producto_nombre = row["nombre"]
 
         # Eliminar el producto
-        conn.execute(text("DELETE FROM productos WHERE id = :id"), {"id": producto_id})
+        cursor.execute("DELETE FROM productos WHERE id = ?", (producto_id,))
+        conn.commit()
 
         # Registrar log de eliminación
         if usuario:
@@ -165,6 +178,8 @@ def delete_product(producto_id: str, usuario: Optional[str] = None) -> bool:
             })
 
         return True
+    finally:
+        conn.close()
 
 # ---------------------------
 #   adjust_stock
@@ -175,60 +190,74 @@ def adjust_stock(product_id: str, cantidad_delta: int, usuario=None) -> dict:
     Ajusta el stock de un producto sumando o restando cantidad_delta.
     Devuelve el producto actualizado.
     """
-    with engine.begin() as conn:
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        
         # Obtener stock actual
-        result = conn.execute(text("SELECT cantidad FROM productos WHERE id = :id"), {"id": product_id})
-        prod = result.mappings().first()
+        cursor.execute("SELECT * FROM productos WHERE id = ?", (product_id,))
+        prod = cursor.fetchone()
         if not prod:
             raise ValueError(f"Producto {product_id} no encontrado")
         
-        nuevo_stock = prod["cantidad"] + cantidad_delta
+        prod_dict = dict(prod)
+        nuevo_stock = prod_dict["cantidad"] + cantidad_delta
         if nuevo_stock < 0:
-            raise ValueError(f"Stock insuficiente para {prod['nombre']}")
+            raise ValueError(f"Stock insuficiente para el producto")
         
-        conn.execute(
-            text("UPDATE productos SET cantidad = :cantidad WHERE id = :id"),
-            {"cantidad": nuevo_stock, "id": product_id}
+        cursor.execute(
+            "UPDATE productos SET cantidad = ? WHERE id = ?",
+            (nuevo_stock, product_id)
         )
+        conn.commit()
         
         # Opcional: registrar log
         if usuario:
-            from .logs import registrar_log
             registrar_log(usuario, "ajustar_stock", {"producto_id": product_id, "delta": cantidad_delta})
         
-        return {**prod, "cantidad": nuevo_stock}
+        prod_dict["cantidad"] = nuevo_stock
+        return prod_dict
+    finally:
+        conn.close()
+
     
 def update_product(id_producto, nombre, cantidad, precio):
-    query = text("""
-        UPDATE productos
-        SET nombre = :nombre, cantidad = :cantidad, precio = :precio
-        WHERE id = :id
-    """)
-    with engine.begin() as conn:
-        conn.execute(query, {"id": id_producto, "nombre": nombre, "cantidad": cantidad, "precio": precio})
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE productos
+            SET nombre = ?, cantidad = ?, precio = ?
+            WHERE id = ?
+        """, (nombre, cantidad, precio, id_producto))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def eliminar_producto(id_producto: int, usuario: str = None):
     """
     Elimina un producto de la base de datos por su ID y registra la acción en logs.
     """
-    query = text("""
-        DELETE FROM productos
-        WHERE id = :id_producto
-        RETURNING id, nombre
-    """)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        
+        # Obtener datos del producto antes de eliminarlo
+        cursor.execute("SELECT id, nombre FROM productos WHERE id = ?", (id_producto,))
+        eliminado = cursor.fetchone()
 
-    with engine.connect() as conn:
-        with conn.begin():  # Maneja la transacción
-            result = conn.execute(query, {"id_producto": id_producto})
-            eliminado = result.mappings().fetchone()  # <-- Mapeo a dict
-
-            if eliminado:
-                # Registrar log si se proporciona usuario
-                if usuario:
-                    registrar_log(usuario, f"Eliminó producto {eliminado['nombre']} (ID {eliminado['id']})")
-                return dict(eliminado)  # Retornar como diccionario
-            return None
+        if eliminado:
+            cursor.execute("DELETE FROM productos WHERE id = ?", (id_producto,))
+            conn.commit()
+            
+            # Registrar log si se proporciona usuario
+            if usuario:
+                registrar_log(usuario, f"Eliminó producto {eliminado['nombre']} (ID {eliminado['id']})")
+            return dict(eliminado)
+        return None
+    finally:
+        conn.close()
         
         
 def increment_stock(producto_id, cantidad):

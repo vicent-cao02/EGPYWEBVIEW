@@ -1,9 +1,8 @@
 # backend/logs.py
 from datetime import datetime
 from typing import List, Dict, Any
-from sqlalchemy import text
 import json
-from .db import engine  # Función que devuelve conexión SQLAlchemy
+from .db import get_connection
 
 # ---------------------------
 # Registrar un log
@@ -24,38 +23,44 @@ def registrar_log(usuario: str, accion: str, detalles):
 
     fecha = datetime.now()
 
-    with engine.begin() as conn:
-        conn.execute(
-            text("""
-                INSERT INTO logs (usuario, accion, detalles, fecha)
-                VALUES (:usuario, :accion, :detalles, :fecha)
-            """),
-            {
-                "usuario": usuario,
-                "accion": accion,
-                "detalles": detalles,
-                "fecha": fecha
-            }
-        )
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO logs (usuario, accion, detalles, fecha)
+            VALUES (?, ?, ?, ?)
+        """, (usuario, accion, detalles, fecha))
+        conn.commit()
+    finally:
+        conn.close()
 
 # ---------------------------
 # Listar todos los logs
 # ---------------------------
 def listar_logs() -> List[Dict[str, Any]]:
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT * FROM logs ORDER BY fecha DESC"))
-        return [dict(row) for row in result.fetchall()]
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM logs ORDER BY fecha DESC")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def obtener_logs_usuario(username: str):
     """Devuelve los registros del historial de acciones de un usuario."""
-    query = text("""
-        SELECT usuario, accion, fecha, detalles
-        FROM logs
-        WHERE usuario = :usuario
-        ORDER BY fecha DESC
-        LIMIT 100
-    """)
-    with engine.connect() as conn:
-        result = conn.execute(query, {"usuario": username})
-        return [row._asdict() for row in result]
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT usuario, accion, fecha, detalles
+            FROM logs
+            WHERE usuario = ?
+            ORDER BY fecha DESC
+            LIMIT 100
+        """, (username,))
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()

@@ -2,8 +2,7 @@
 import streamlit as st
 import pandas as pd
 import io
-from sqlalchemy import text
-from backend.db import engine
+from backend.db import get_connection
 from backend import productos
 
 st.set_page_config(page_title="🧾 Auditoría del Sistema", layout="wide")
@@ -24,8 +23,10 @@ if st.session_state.usuario["rol"] != "admin":
 # ---------------------------
 @st.cache_data(ttl=30)
 def cargar_auditoria():
-    with engine.connect() as conn:
-        result = conn.execute(text("""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
             SELECT 
                 id,
                 accion,
@@ -34,7 +35,12 @@ def cargar_auditoria():
                 fecha
             FROM auditoria
             ORDER BY fecha DESC
-        """)).mappings().all()
+        """)
+        rows = cursor.fetchall()
+        result = [dict(row) for row in rows]
+    finally:
+        conn.close()
+    
     df = pd.DataFrame(result)
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
     df["fecha_str"] = df["fecha"].dt.strftime("%Y-%m-%d %H:%M:%S")

@@ -1,67 +1,73 @@
-import pandas as pd
-import sqlite3
-from sqlalchemy import create_engine
+"""
+DEPRECATED - Script histórico de migración de PostgreSQL (Neon) a SQLite
+Este archivo ya no es necesario ya que toda la aplicación ha sido refactorizada a SQLite.
 
-# =========================================
-# 🔌 CONEXIÓN A NEON (YA CONFIGURADA)
-# =========================================
-POSTGRES_URL = "postgresql://neondb_owner:npg_BY8QzbZ1Vsmu@ep-calm-mouse-adgcgbq7-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+Para usar este script (si es necesario), instala psycopg2:
+    pip install psycopg2
 
-engine = create_engine(POSTGRES_URL)
+Sin embargo, la aplicación ya está completamente funcionando con SQLite local.
+"""
 
-# =========================================
-# 🔌 SQLITE LOCAL
-# =========================================
-sqlite_conn = sqlite3.connect("negocio.db")
+# import pandas as pd
+# import sqlite3
+# import psycopg2
 
-# =========================================
-# 📋 TABLAS A MIGRAR
-# =========================================
-tablas = [
-    "productos",
-    "clientes",
-    "ventas",
-    "deudas",
-    "usuarios",
-    "categorias",
-    "logs",
-    "auditoria",
-    "ventas_detalle",
-    "deudas_detalle"
-]
+# # =========================================
+# # 🔌 CONEXIÓN NEON (MISMA QUE TU TEST)
+# # =========================================
+# NEON_DATABASE_URL = "postgresql://neondb_owner:npg_BY8QzbZ1Vsmu@ep-calm-mouse-adgcgbq7-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
 
-# =========================================
-# 🚀 MIGRACIÓN ROBUSTA
-# =========================================
-for tabla in tablas:
-    print(f"\n🔄 Migrando: {tabla}")
+# neon_conn = psycopg2.connect(NEON_DATABASE_URL)
 
-    try:
-        # Leer datos desde Neon
-        df = pd.read_sql(f"SELECT * FROM {tabla}", engine)
+# # =========================================
+# # 🔌 SQLITE LOCAL
+# # =========================================
+# sqlite_conn = sqlite3.connect("negocio.db")
 
-        if df.empty:
-            print(f"⚠️ {tabla} está vacía")
-            continue
+# # =========================================
+# # 📋 TABLAS
+# # =========================================
+# tablas = [
+#     "productos",
+#     "clientes",
+#     "ventas",
+#     "deudas",
+#     "usuarios",
+#     "categorias",
+#     "logs",
+#     "auditoria",
+#     "ventas_detalle",
+#     "deudas_detalle"
+# ]
 
-        # 🔧 LIMPIEZA (CLAVE)
-        df = df.fillna("")
+# # =========================================
+# # 🚀 MIGRACIÓN
+# # =========================================
+# for tabla in tablas:
+#     print(f"\n🔄 Migrando: {tabla}")
 
-        # Convertir tipos problemáticos
-        for col in df.columns:
-            if df[col].dtype == "object":
-                df[col] = df[col].astype(str)
+#     try:
+#         query = f"SELECT * FROM {tabla};"
+#         df = pd.read_sql(query, neon_conn)
 
-        # Insertar en SQLite
-        df.to_sql(tabla, sqlite_conn, if_exists="append", index=False)
+#         if df.empty:
+#             print(f"⚠️ {tabla} vacía")
+#             continue
 
-        print(f"✅ {tabla}: {len(df)} registros migrados")
+#         # LIMPIEZA
+#         df = df.fillna("")
+#         df = df.astype(str)
 
-    except Exception as e:
-        print(f"❌ Error en {tabla}: {e}")
+#         df.to_sql(tabla, sqlite_conn, if_exists="append", index=False)
 
-# =========================================
-# 🔚 CIERRE
-# =========================================
-sqlite_conn.close()
-print("\n🎉 MIGRACIÓN COMPLETADA")
+#         print(f"✅ {tabla}: {len(df)} registros")
+
+#     except Exception as e:
+#         print(f"❌ Error en {tabla}: {e}")
+
+# # =========================================
+# # 🔚 CIERRE
+# # =========================================
+# neon_conn.close()
+# sqlite_conn.close()
+# print("\n🎉 MIGRACIÓN COMPLETA REAL")
