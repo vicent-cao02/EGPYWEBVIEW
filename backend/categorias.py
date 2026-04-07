@@ -1,8 +1,8 @@
 # backend/categorias.py
-from .db import get_connection
+from sqlalchemy import text
+from .db import engine
 from .logs import registrar_log
 from typing import Optional, Dict, List
-
 
 # ---------------------------
 # Funciones de categorías
@@ -10,27 +10,17 @@ from typing import Optional, Dict, List
 
 def list_categories() -> List[Dict]:
     """Devuelve todas las categorías con su id desde la DB"""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, nombre FROM categorias ORDER BY nombre ASC")
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-    finally:
-        conn.close()
-
+    query = text("SELECT id, nombre FROM categorias ORDER BY nombre ASC")
+    with engine.connect() as conn:
+        result = conn.execute(query)
+        return [dict(row) for row in result.mappings().all()]
 
 def get_category(cat_id: int) -> Optional[Dict]:
     """Devuelve una categoría específica por su id"""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, nombre FROM categorias WHERE id = ?", (cat_id,))
-        result = cursor.fetchone()
+    query = text("SELECT id, nombre FROM categorias WHERE id = :id")
+    with engine.connect() as conn:
+        result = conn.execute(query, {"id": cat_id}).mappings().first()
         return dict(result) if result else None
-    finally:
-        conn.close()
-
 
 def agregar_categoria(nombre: str, usuario: str = None) -> str:
     """Agrega una nueva categoría"""
@@ -43,17 +33,12 @@ def agregar_categoria(nombre: str, usuario: str = None) -> str:
     if nombre.lower() in categorias:
         raise ValueError(f"La categoría '{nombre}' ya existe.")
 
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO categorias (nombre) VALUES (?)", (nombre,))
-        conn.commit()
-    finally:
-        conn.close()
+    query = text("INSERT INTO categorias (nombre) VALUES (:nombre)")
+    with engine.begin() as conn:
+        conn.execute(query, {"nombre": nombre})
 
     registrar_log(usuario or "sistema", "crear_categoria", {"nombre": nombre})
     return nombre
-
 
 def editar_categoria(cat_id: int, nombre_nuevo: str, usuario: str = None) -> str:
     """Edita el nombre de una categoría existente por ID"""
@@ -69,13 +54,9 @@ def editar_categoria(cat_id: int, nombre_nuevo: str, usuario: str = None) -> str
     if nombre_nuevo.lower() in categorias:
         raise ValueError(f"La categoría '{nombre_nuevo}' ya existe.")
 
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE categorias SET nombre = ? WHERE id = ?", (nombre_nuevo, cat_id))
-        conn.commit()
-    finally:
-        conn.close()
+    query = text("UPDATE categorias SET nombre = :nombre_nuevo WHERE id = :cat_id")
+    with engine.begin() as conn:
+        conn.execute(query, {"nombre_nuevo": nombre_nuevo, "cat_id": cat_id})
 
     registrar_log(usuario or "sistema", "editar_categoria", {
         "id": cat_id,
@@ -83,32 +64,19 @@ def editar_categoria(cat_id: int, nombre_nuevo: str, usuario: str = None) -> str
     })
     return nombre_nuevo
 
-
 def eliminar_categoria(cat_id: int, usuario: str = None):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, nombre FROM categorias WHERE id = ?", (cat_id,))
-        row = cursor.fetchone()
-        
-        if row:
-            cursor.execute("DELETE FROM categorias WHERE id = ?", (cat_id,))
-            conn.commit()
-            registrar_log(usuario or "sistema", "eliminar_categoria", dict(row))
-            return dict(row)
-        else:
-            raise ValueError("Categoría no encontrada")
-    finally:
-        conn.close()
-
+    with engine.begin() as conn:
+        res = conn.execute(text("DELETE FROM categorias WHERE id = :id RETURNING id, nombre"), {"id": cat_id})
+        row = res.mappings().first()
+    if row:
+        registrar_log(usuario or "sistema", "eliminar_categoria", dict(row))
+        return dict(row)
+    else:
+        raise ValueError("Categoría no encontrada")
 
 def list_products_by_category(categoria_id: int) -> list[dict]:
     """Devuelve todos los productos de una categoría específica"""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM productos WHERE categoria_id = ? ORDER BY nombre", (categoria_id,))
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-    finally:
-        conn.close()
+    query = text("SELECT * FROM productos WHERE categoria_id = :categoria_id ORDER BY nombre")
+    with engine.connect() as conn:
+        result = conn.execute(query, {"categoria_id": categoria_id})
+        return [dict(row) for row in result.mappings().all()]
