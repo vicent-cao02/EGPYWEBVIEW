@@ -1,56 +1,53 @@
+import sqlite3
 import os
-from sqlalchemy import create_engine, MetaData, text
-from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
 from contextlib import contextmanager
+from typing import Generator
 
 # ---------------------------
-# Cargar .env
+# Configuración SQLite
 # ---------------------------
-dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-load_dotenv(dotenv_path)
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "negocio.db")
 
-DATABASE_URL = os.getenv("NEON_DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("No se encontró NEON_DATABASE_URL en el archivo .env")
-
-# ---------------------------
-# Motor y sesión
-# ---------------------------
-engine = create_engine(DATABASE_URL, echo=False, future=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Objeto MetaData global
-metadata = MetaData()
-
-# ---------------------------
-# Context manager para conexión
-# ---------------------------
-@contextmanager
 def get_connection():
     """
-    Devuelve una sesión de SQLAlchemy (context manager).
-    Uso:
-       with get_connection() as session:  
-           session.execute(...)
+    Devuelve una conexión SQLite con row_factory configurado para dict.
     """
-    session = SessionLocal()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    # Habilitar foreign keys
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+@contextmanager
+def get_db_connection() -> Generator[sqlite3.Connection, None, None]:
+    """
+    Context manager para conexiones SQLite.
+    """
+    conn = get_connection()
     try:
-        yield session
-        session.commit()
+        yield conn
+        conn.commit()
     except Exception:
-        session.rollback()
+        conn.rollback()
         raise
     finally:
-        session.close()
+        conn.close()
 
-# ---------------------------
-# Función de prueba
-# ---------------------------
 def test_connection():
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT NOW()"))
-        print("Conexión exitosa ✅", result.scalar())
+    """
+    Prueba la conexión a la base de datos SQLite.
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM productos")
+        count = cursor.fetchone()[0]
+        conn.close()
+        print(f"✅ Conexión SQLite exitosa - {count} productos encontrados")
+        return True
+    except Exception as e:
+        print(f"❌ Error de conexión SQLite: {e}")
+        return False
 
 if __name__ == "__main__":
     test_connection()
