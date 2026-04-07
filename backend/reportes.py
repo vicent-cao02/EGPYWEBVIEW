@@ -1,6 +1,7 @@
 
 import datetime
 from backend.ventas import list_sales
+from backend.deudas import list_debts
 from collections import Counter
 import json
 from pathlib import Path
@@ -11,7 +12,20 @@ from .logs import registrar_log
 def ventas_diarias(fecha=None, actor=None):
     if not fecha:
         fecha = str(datetime.date.today())
-    resultado = [v for v in list_sales() if v["fecha"] == fecha]
+    
+    ventas = list_sales()
+    resultado = []
+    for v in ventas:
+        # Manejar tanto strings como objetos datetime
+        v_fecha = v.get("fecha", "")
+        if isinstance(v_fecha, str):
+            v_fecha_str = v_fecha.split("T")[0] if "T" in v_fecha else v_fecha
+        else:
+            v_fecha_str = str(v_fecha)
+        
+        if v_fecha_str == fecha:
+            resultado.append(v)
+    
     registrar_log(
         usuario=actor or "sistema",
         accion="reporte_ventas_diarias",
@@ -19,12 +33,18 @@ def ventas_diarias(fecha=None, actor=None):
     )
     return resultado
 
+
 def ventas_mensuales(mes, anio, actor=None):
     result = []
     for v in list_sales():
-        v_fecha = datetime.datetime.strptime(v["fecha"], "%Y-%m-%d")
-        if v_fecha.month == mes and v_fecha.year == anio:
-            result.append(v)
+        try:
+            v_fecha_str = v.get("fecha", "").split("T")[0] if "T" in str(v.get("fecha", "")) else str(v.get("fecha", ""))
+            v_fecha = datetime.datetime.strptime(v_fecha_str, "%Y-%m-%d")
+            if v_fecha.month == mes and v_fecha.year == anio:
+                result.append(v)
+        except (ValueError, AttributeError):
+            pass
+    
     registrar_log(
         usuario=actor or "sistema",
         accion="reporte_ventas_mensuales",
@@ -32,11 +52,12 @@ def ventas_mensuales(mes, anio, actor=None):
     )
     return result
 
+
 def productos_mas_vendidos(actor=None):
     counter = Counter()
     for v in list_sales():
-        for p in v["productos_vendidos"]:
-            counter[p["nombre"]] += p["cantidad"]
+        for p in v.get("productos_vendidos", []):
+            counter[p.get("nombre", "Desconocido")] += float(p.get("cantidad", 0))
     resultado = counter.most_common()
     registrar_log(
         usuario=actor or "sistema",
@@ -45,11 +66,11 @@ def productos_mas_vendidos(actor=None):
     )
     return resultado
 
+
 def deudas_clientes(actor=None):
-    with open("data/deudas.json", "r") as f:
-        deudas = json.load(f)
+    deudas = list_debts()
     if not deudas:
-        df = pd.DataFrame(columns=["id", "cliente_id", "monto", "estado", "fecha"])
+        df = pd.DataFrame(columns=["id", "cliente_id", "monto_total", "estado", "fecha"])
     else:
         df = pd.DataFrame(deudas)
     registrar_log(

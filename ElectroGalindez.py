@@ -73,8 +73,8 @@ col3.metric("💳 Deudas Pendientes", f"${total_deuda:,.2f}")
 # KPI SECUNDARIOS
 # =====================================================
 if not df_ven.empty:
-    df_ven["total"] = df_ven["total"].astype(float)
-    df_ven["saldo"] = df_ven["saldo"].astype(float)
+    df_ven["total"] = pd.to_numeric(df_ven["total"], errors='coerce').fillna(0)
+    df_ven["saldo"] = pd.to_numeric(df_ven["saldo"], errors='coerce').fillna(0)
 
     ticket_prom = ventas_hoy["total"].mean() if not ventas_hoy.empty else 0
     porc_deuda = (df_ven["saldo"].sum() / df_ven["total"].sum() * 100) if df_ven["total"].sum() > 0 else 0

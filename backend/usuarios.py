@@ -203,4 +203,10 @@ def eliminar_usuario(username, actor=None):
         registrar_log(usuario=actor or username, accion="eliminar_usuario", detalles={"username": username})
     finally:
         conn.close()
+<<<<<<< Updated upstream
     return True 
+=======
+    
+    registrar_log(usuario=actor or username, accion="eliminar_usuario", detalles={"username": username})
+    return True
+>>>>>>> Stashed changes

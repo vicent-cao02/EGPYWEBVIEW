@@ -1,5 +1,9 @@
 # Permite importar módulos desde backend
+<<<<<<< Updated upstream
 # from .db import engine, MetaData  # Removed as now using SQLite directly
+=======
+from .db import get_connection
+>>>>>>> Stashed changes
 
 from .usuarios import (
     crear_usuario, autenticar_usuario, cambiar_password,
@@ -19,15 +23,13 @@ from .clientes import (
 
 from .ventas import (
     list_sales, get_sale, delete_sale,
-    register_sale, generar_factura_pdf,
-    listar_ventas_dict, editar_venta_extra
+    register_sale, listar_ventas_dict, editar_venta_extra
 )
 
 from .deudas import (
-    list_debts, get_debt, add_debt, update_debt,
+    list_debts, get_debt, add_debt,
     debts_by_client, delete_debt, pay_debt_producto,
-    list_detalle_deudas, list_clientes_con_deuda,
-    generar_factura_pago_deuda
+    list_detalle_deudas, list_clientes_con_deuda
 )
 
 from .categorias import (

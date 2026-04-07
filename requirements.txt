@@ -23,10 +23,9 @@ openpyxl>=3.0
 bcrypt>=4.0
 
 # ======================================================
-# 🗄 Base de datos
+# 🗄 Base de datos (SQLite3 incluido en Python)
 # ======================================================
-sqlalchemy>=2.0
-psycopg2-binary>=2.9
+# SQLite3 viene con Python, no necesita instalación
 
 # ======================================================
 # 🔄 Manejo de archivos y concurrencia
@@ -41,6 +40,5 @@ reportlab>=3.6
 # ======================================================
 # 🔧 Utilidades varias
 # ======================================================
-
 python-dateutil>=2.8
 python-dotenv>=1.0

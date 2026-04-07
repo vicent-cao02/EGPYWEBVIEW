@@ -70,6 +70,7 @@ def test_products():
         print_success(f"{len(products)} productos encontrados")
 
         # Probar crear producto
+<<<<<<< Updated upstream
         test_product_name = f"Producto Test {datetime.now().strftime('%H%M%S')}"
         result = guardar_producto(
             nombre=test_product_name,
@@ -81,6 +82,21 @@ def test_products():
         if result:
             print_success("Producto creado correctamente")
             product_id = result["id"]
+=======
+        test_product = {
+            "nombre": f"Producto Test {datetime.now().strftime('%H%M%S')}",
+            "descripcion": "Producto de prueba",
+            "precio": 10.50,
+            "stock": 100,
+            "categoria_id": 1,
+            "codigo_barras": f"TEST{datetime.now().strftime('%H%M%S')}"
+        }
+
+        result = guardar_producto(test_product)
+        if result:
+            print_success("Producto creado correctamente")
+            product_id = result
+>>>>>>> Stashed changes
 
             # Probar obtener producto
             product = get_product(product_id)
@@ -110,6 +126,7 @@ def test_clients():
         print_success(f"{len(clients)} clientes encontrados")
 
         # Probar crear cliente
+<<<<<<< Updated upstream
         test_client_name = f"Cliente Test {datetime.now().strftime('%H%M%S')}"
         result = add_client(
             nombre=test_client_name,
@@ -119,6 +136,17 @@ def test_clients():
             chapa=f"CHAPA{datetime.now().strftime('%H%M%S')}",
             usuario="admin"
         )
+=======
+        test_client = {
+            "nombre": f"Cliente Test {datetime.now().strftime('%H%M%S')}",
+            "ci": f"12345678{datetime.now().strftime('%S')}",
+            "telefono": "099123456",
+            "direccion": "Dirección de prueba",
+            "chapa": f"CHAPA{datetime.now().strftime('%H%M%S')}"
+        }
+
+        result = add_client(test_client)
+>>>>>>> Stashed changes
         if result:
             print_success("Cliente creado correctamente")
             client_id = result
@@ -129,6 +157,7 @@ def test_clients():
                 print_success("Cliente obtenido correctamente")
 
                 # Probar actualizar cliente
+<<<<<<< Updated upstream
                 update_result = update_client(client_id, {
                     "nombre": test_client_name,
                     "telefono": "098765432",
@@ -136,6 +165,10 @@ def test_clients():
                     "direccion": "Dirección actualizada",
                     "chapa": f"CHAPA{datetime.now().strftime('%H%M%S')}"
                 })
+=======
+                test_client["telefono"] = "098765432"
+                update_result = update_client(client_id, test_client)
+>>>>>>> Stashed changes
                 if update_result:
                     print_success("Cliente actualizado correctamente")
                 else:
@@ -172,8 +205,13 @@ def test_users():
 def test_sales():
     print_test_header("PRUEBA DE VENTAS")
     try:
+<<<<<<< Updated upstream
         sales = list_sales()
         print_success(f"{len(sales)} ventas encontradas")
+=======
+        sales = list_sales(limit=10)
+        print_success(f"Últimas {len(sales)} ventas obtenidas")
+>>>>>>> Stashed changes
 
         # Para probar registro de venta necesitaríamos productos existentes
         # Por ahora solo verificamos que la función existe y no da error
@@ -202,8 +240,13 @@ def test_debts():
 def test_logs():
     print_test_header("PRUEBA DE LOGS")
     try:
+<<<<<<< Updated upstream
         logs = listar_logs()
         print_success(f"{len(logs)} logs encontrados")
+=======
+        logs = listar_logs(limit=10)
+        print_success(f"Últimos {len(logs)} logs obtenidos")
+>>>>>>> Stashed changes
 
         # Probar registrar log
         result = registrar_log("Test", "Prueba de funcionamiento", "admin")

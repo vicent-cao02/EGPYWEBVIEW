@@ -1,5 +1,5 @@
 """
-Módulo para manejar deudas y pagos por producto en PostgreSQL.
+Módulo para manejar deudas y pagos por producto en SQLite.
 
 Funciones públicas:
 - list_debts()
@@ -12,8 +12,7 @@ Funciones públicas:
 
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from sqlalchemy import text
-from .db import engine
+from .db import get_connection
 from .clientes import update_debt
 from backend.ventas import get_sale
 from backend import ventas
@@ -23,48 +22,58 @@ from backend import ventas
 # 📜 Listar todas las deudas
 # ======================================================
 def list_debts() -> List[Dict[str, Any]]:
-    query = text("SELECT * FROM deudas ORDER BY fecha DESC")
-    with engine.connect() as conn:
-        result = conn.execute(query)
-        return [dict(row._mapping) for row in result]
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM deudas ORDER BY fecha DESC")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 # ======================================================
 # 🔍 Obtener deuda con detalles
 # ======================================================
 def get_debt(deuda_id: int) -> Optional[Dict[str, Any]]:
-    query = text("""
-        SELECT d.id AS deuda_id, d.cliente_id, d.venta_id, d.monto_total, d.estado, d.fecha, d.descripcion,
-               dd.id AS detalle_id, dd.producto_id, dd.cantidad, dd.precio_unitario, dd.estado AS estado_detalle
-        FROM deudas d
-        LEFT JOIN deudas_detalle dd ON d.id = dd.deuda_id
-        WHERE d.id = :deuda_id
-        ORDER BY dd.id
-    """)
-    with engine.connect() as conn:
-        rows = conn.execute(query, {"deuda_id": deuda_id}).mappings().all()
-        if not rows:
-            return None
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT d.id AS deuda_id, d.cliente_id, d.venta_id, d.monto_total, d.estado, d.fecha, d.descripcion,
+                   dd.id AS detalle_id, dd.producto_id, dd.cantidad, dd.precio_unitario, dd.estado AS estado_detalle
+            FROM deudas d
+            LEFT JOIN deudas_detalle dd ON d.id = dd.deuda_id
+            WHERE d.id = ?
+            ORDER BY dd.id
+        """, (deuda_id,))
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+    
+    if not rows:
+        return None
 
-        deuda_info = dict(rows[0])
-        detalles = []
-        for r in rows:
-            if r["detalle_id"] is not None:
-                detalles.append({
-                    "id": r["detalle_id"],
-                    "producto_id": r["producto_id"],
-                    "cantidad": r["cantidad"],
-                    "precio_unitario": r["precio_unitario"],
-                    "estado": r["estado_detalle"]
-                })
+    deuda_info = dict(rows[0])
+    detalles = []
+    for r in rows:
+        if r["detalle_id"] is not None:
+            detalles.append({
+                "id": r["detalle_id"],
+                "producto_id": r["producto_id"],
+                "cantidad": r["cantidad"],
+                "precio_unitario": r["precio_unitario"],
+                "estado": r["estado_detalle"]
+            })
 
-        deuda_info["detalles"] = detalles
+    deuda_info["detalles"] = detalles
 
-        # Quitar columnas repetidas de detalle
-        for k in ["detalle_id", "producto_id", "cantidad", "precio_unitario", "estado_detalle"]:
-            deuda_info.pop(k, None)
+    # Quitar columnas repetidas de detalle
+    for k in ["detalle_id", "producto_id", "cantidad", "precio_unitario", "estado_detalle"]:
+        deuda_info.pop(k, None)
 
-        return deuda_info
+    return deuda_info
+
 
 # ======================================================
 # ➕ Crear deuda con detalles por producto
@@ -72,7 +81,7 @@ def get_debt(deuda_id: int) -> Optional[Dict[str, Any]]:
 def add_debt(
     cliente_id: int,
     venta_id: int = None,
-    productos: list = None,  # lista de dicts: {id_producto, cantidad, precio_unitario}
+    productos: list = None,
     monto_total: float = 0.0,
     estado: str = "pendiente",
     usuario: str = None
@@ -80,36 +89,31 @@ def add_debt(
     """
     Crea una deuda principal y registros por producto en deudas_detalle.
     """
-    fecha = datetime.now()
+    fecha = datetime.now().isoformat()
 
-    with engine.begin() as conn:
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        
         # Insertar deuda principal
-        query = text("""
+        cursor.execute("""
             INSERT INTO deudas (cliente_id, venta_id, monto_total, estado, fecha, descripcion)
-            VALUES (:cliente_id, :venta_id, :monto_total, :estado, :fecha, :descripcion)
-            RETURNING id
-        """)
-        deuda_id = conn.execute(query, {
-            "cliente_id": cliente_id,
-            "venta_id": venta_id,
-            "monto_total": monto_total,
-            "estado": estado,
-            "fecha": fecha,
-            "descripcion": f"Deuda generada por venta {venta_id or 'N/A'}"
-        }).scalar()
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (cliente_id, venta_id, monto_total, estado, fecha, f"Deuda generada por venta {venta_id or 'N/A'}"))
+        conn.commit()
+
+        deuda_id = cursor.lastrowid
 
         # Insertar detalles por producto
         if productos:
             for p in productos:
-                conn.execute(text("""
+                cursor.execute("""
                     INSERT INTO deudas_detalle (deuda_id, producto_id, cantidad, precio_unitario, estado)
-                    VALUES (:deuda_id, :producto_id, :cantidad, :precio_unitario, 'pendiente')
-                """), {
-                    "deuda_id": deuda_id,
-                    "producto_id": p["id_producto"],
-                    "cantidad": p["cantidad"],
-                    "precio_unitario": p["precio_unitario"]
-                })
+                    VALUES (?, ?, ?, ?, 'pendiente')
+                """, (deuda_id, p["id_producto"], p["cantidad"], p["precio_unitario"]))
+            conn.commit()
+    finally:
+        conn.close()
 
     update_debt(cliente_id, monto_total)
     return deuda_id
@@ -133,27 +137,31 @@ def pay_debt_producto(deuda_id: int, producto_id: int, monto_pago: float, usuari
     nueva_cantidad = max(float(detalle["cantidad"]) - cantidad_pagada, 0)
     nuevo_estado_det = "pagado" if nueva_cantidad == 0 else "pendiente"
 
-    with engine.begin() as conn:
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        
         # Actualizar detalle
-        conn.execute(text("""
+        cursor.execute("""
             UPDATE deudas_detalle
-            SET cantidad=:cantidad, estado=:estado
-            WHERE id=:id
-        """), {"cantidad": nueva_cantidad, "estado": nuevo_estado_det, "id": detalle["id"]})
+            SET cantidad = ?, estado = ?
+            WHERE id = ?
+        """, (nueva_cantidad, nuevo_estado_det, detalle["id"]))
 
         # Actualizar estado de deuda principal
-        total_restante = conn.execute(text("""
+        cursor.execute("""
             SELECT SUM(cantidad * precio_unitario)
             FROM deudas_detalle
-            WHERE deuda_id=:deuda_id AND estado='pendiente'
-        """), {"deuda_id": deuda_id}).scalar() or 0
+            WHERE deuda_id = ? AND estado = 'pendiente'
+        """, (deuda_id,))
+        total_restante = cursor.fetchone()[0] or 0
 
         estado_deuda = "pagada" if total_restante <= 0 else "pendiente"
-        conn.execute(text("""
+        cursor.execute("""
             UPDATE deudas
-            SET estado=:estado
-            WHERE id=:deuda_id
-        """), {"estado": estado_deuda, "deuda_id": deuda_id})
+            SET estado = ?
+            WHERE id = ?
+        """, (estado_deuda, deuda_id))
 
         # Actualizar venta asociada
         if total_restante <= 0:
@@ -163,12 +171,15 @@ def pay_debt_producto(deuda_id: int, producto_id: int, monto_pago: float, usuari
                 venta = get_sale(venta_id)
                 if venta:
                     venta["pagado"] = venta["total"]
-                    from backend import ventas
                     ventas.editar_venta_extra(
                         sale_id=venta_id,
                         observaciones=venta.get("observaciones"),
                         usuario=usuario
                     )
+        
+        conn.commit()
+    finally:
+        conn.close()
 
     return {"detalle": detalle, "estado_deuda": estado_deuda}
 
@@ -177,41 +188,47 @@ def pay_debt_producto(deuda_id: int, producto_id: int, monto_pago: float, usuari
 # 📋 Listar deudas por cliente
 # ======================================================
 def debts_by_client(cliente_id: int):
-    query = text("""
-        SELECT d.id AS deuda_id, d.cliente_id, d.venta_id, d.monto_total, d.estado, d.fecha, d.descripcion,
-               dd.id AS detalle_id, dd.producto_id, dd.cantidad, dd.precio_unitario, dd.estado AS estado_detalle
-        FROM deudas d
-        LEFT JOIN deudas_detalle dd ON d.id = dd.deuda_id
-        WHERE d.cliente_id = :cliente_id
-        ORDER BY d.fecha DESC, dd.id
-    """)
-    with engine.connect() as conn:
-        rows = conn.execute(query, {"cliente_id": cliente_id}).mappings().all()
-        if not rows:
-            return []
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT d.id AS deuda_id, d.cliente_id, d.venta_id, d.monto_total, d.estado, d.fecha, d.descripcion,
+                   dd.id AS detalle_id, dd.producto_id, dd.cantidad, dd.precio_unitario, dd.estado AS estado_detalle
+            FROM deudas d
+            LEFT JOIN deudas_detalle dd ON d.id = dd.deuda_id
+            WHERE d.cliente_id = ?
+            ORDER BY d.fecha DESC, dd.id
+        """, (cliente_id,))
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+    
+    if not rows:
+        return []
 
-        deudas_map = {}
-        for r in rows:
-            d_id = r["deuda_id"]
-            if d_id not in deudas_map:
-                deudas_map[d_id] = dict(r)
-                deudas_map[d_id]["detalles"] = []
+    deudas_map = {}
+    for r in rows:
+        d_id = r["deuda_id"]
+        if d_id not in deudas_map:
+            deudas_map[d_id] = dict(r)
+            deudas_map[d_id]["detalles"] = []
 
-            if r["detalle_id"] is not None:
-                deudas_map[d_id]["detalles"].append({
-                    "id": r["detalle_id"],
-                    "producto_id": r["producto_id"],
-                    "cantidad": r["cantidad"],
-                    "precio_unitario": r["precio_unitario"],
-                    "estado": r["estado_detalle"]
-                })
+        if r["detalle_id"] is not None:
+            deudas_map[d_id]["detalles"].append({
+                "id": r["detalle_id"],
+                "producto_id": r["producto_id"],
+                "cantidad": r["cantidad"],
+                "precio_unitario": r["precio_unitario"],
+                "estado": r["estado_detalle"]
+            })
 
-        # Limpiar columnas repetidas de detalle
-        for deuda in deudas_map.values():
-            for k in ["detalle_id", "producto_id", "cantidad", "precio_unitario", "estado_detalle"]:
-                deuda.pop(k, None)
+    # Limpiar columnas repetidas de detalle
+    for deuda in deudas_map.values():
+        for k in ["detalle_id", "producto_id", "cantidad", "precio_unitario", "estado_detalle"]:
+            deuda.pop(k, None)
 
-        return list(deudas_map.values())
+    return list(deudas_map.values())
+
 
 # ======================================================
 # 🗑️ Eliminar deuda
@@ -221,9 +238,14 @@ def delete_debt(deuda_id: int, usuario: Optional[str] = None) -> bool:
     if not deuda:
         return False
 
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM deudas_detalle WHERE deuda_id=:id"), {"id": deuda_id})
-        conn.execute(text("DELETE FROM deudas WHERE id=:id"), {"id": deuda_id})
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM deudas_detalle WHERE deuda_id = ?", (deuda_id,))
+        cursor.execute("DELETE FROM deudas WHERE id = ?", (deuda_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
     update_debt(deuda["cliente_id"], -float(deuda["monto_total"]))
 
@@ -244,32 +266,45 @@ def delete_debt(deuda_id: int, usuario: Optional[str] = None) -> bool:
 # 📊 Listar todos los detalles de deudas
 # ======================================================
 def list_detalle_deudas():
-    query = text("""
-        SELECT dd.id AS detalle_id, dd.deuda_id, dd.producto_id, dd.cantidad, dd.precio_unitario, dd.estado,
-               d.cliente_id, d.fecha, d.monto_total, d.estado AS estado_deuda
-        FROM deudas_detalle dd
-        JOIN deudas d ON d.id = dd.deuda_id
-        ORDER BY d.fecha DESC
-    """)
-    with engine.connect() as conn:
-        return [dict(row._mapping) for row in conn.execute(query)]
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT dd.id AS detalle_id, dd.deuda_id, dd.producto_id, dd.cantidad, dd.precio_unitario, dd.estado,
+                   d.cliente_id, d.fecha, d.monto_total, d.estado AS estado_deuda
+            FROM deudas_detalle dd
+            JOIN deudas d ON d.id = dd.deuda_id
+            ORDER BY d.fecha DESC
+        """)
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 # ======================================================
 # 📋 Listar clientes con deudas pendientes
 # ======================================================
 def list_clientes_con_deuda():
-    query = text("""
-        SELECT DISTINCT c.id, c.nombre, c.deuda_total
-        FROM clientes c
-        JOIN deudas d ON c.id = d.cliente_id
-        WHERE d.estado='pendiente' AND c.deuda_total>0
-        ORDER BY c.nombre
-    """)
-    with engine.connect() as conn:
-        return [dict(row._mapping) for row in conn.execute(query)]
-    
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT c.id, c.nombre, c.deuda_total
+            FROM clientes c
+            JOIN deudas d ON c.id = d.cliente_id
+            WHERE d.estado = 'pendiente' AND c.deuda_total > 0
+            ORDER BY c.nombre
+        """)
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
+
+# ======================================================
+# 📄 Generar Factura de Pago de Deuda (PDF)
+# ======================================================
 from io import BytesIO
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
@@ -301,7 +336,7 @@ def generar_factura_pago_deuda(
     width, height = letter
     line_height = 15
 
-    # ---------------- Logo ----------------
+    # Cargar logo local
     logo = None
     if os.path.exists(logo_path):
         try:
@@ -326,68 +361,109 @@ def generar_factura_pago_deuda(
             c.drawImage(logo, 40, current_y - 30, width=80, height=60, preserveAspectRatio=True)
 
         # Título
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(150, current_y, "COMPROBANTE DE PAGO DE DEUDA")
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(140, current_y, "RECIBO DE PAGO DE DEUDA")
+        current_y -= 30
 
-        # Info deuda
-        c.setFont("Helvetica", 10)
-        current_y -= 40
-        c.drawString(50, current_y, f"No. de Deuda: {str(deuda_id)}")
-        current_y -= line_height
-        c.drawString(50, current_y, f"Fecha de Pago: {fecha_pago}")
-        current_y -= line_height
-
-        # Info cliente
+        # Información de la empresa
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(50, current_y, "Datos del Cliente:")
-        current_y -= line_height
+        c.drawString(40, current_y, "Omar Galíndez Ramirez. CI: 85082506984")
+        current_y -= 15
         c.setFont("Helvetica", 10)
-        c.drawString(50, current_y, f"Nombre: {cliente.get('nombre','N/A')}"); current_y -= line_height
-        c.drawString(50, current_y, f"CI / Documento: {cliente.get('ci','N/A')}"); current_y -= line_height
-        c.drawString(50, current_y, f"Dirección: {cliente.get('direccion','N/A')}"); current_y -= line_height
-        c.drawString(50, current_y, f"Teléfono: {cliente.get('telefono','N/A')}"); current_y -= line_height
-        c.drawString(50, current_y, f"Chapa: {cliente.get('chapa','N/A')}"); current_y -= line_height + 10
+        c.drawString(40, current_y, f"Recibo N°: {deuda_id}")
+        c.drawString(300, current_y, f"Fecha: {fecha_pago}")
+        current_y -= 20
 
-        # Tabla productos
-        table_y = current_y
-        table_data = [["Producto", "Cantidad", "Precio Unitario", "Monto Pagado"]]
+        # Información del cliente
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(40, current_y, "Cliente:")
+        c.setFont("Helvetica", 10)
+        c.drawString(100, current_y, cliente.get("nombre", ""))
+        current_y -= 15
+        c.drawString(40, current_y, "CI:")
+        c.drawString(100, current_y, cliente.get("ci", ""))
+        current_y -= 15
+        c.drawString(40, current_y, "Chapa:")
+        c.drawString(100, current_y, cliente.get("chapa", ""))
+        current_y -= 20
+
+        # Información del pago
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(40, current_y, "Método de Pago:")
+        c.setFont("Helvetica", 10)
+        c.drawString(140, current_y, metodo_pago)
+        current_y -= 15
+        c.drawString(40, current_y, "Usuario:")
+        c.drawString(140, current_y, usuario)
+        current_y -= 20
+
+        # Tabla de productos pagados
+        table_data = [["Producto", "Cantidad", "Precio Unitario", "Total Pagado"]]
         total_pagado = 0
-        for p in productos_pagados:
-            cantidad = float(p.get("cantidad") or 0)
-            precio = float(p.get("precio_unitario") or 0)
-            subtotal = cantidad * precio
-            total_pagado += subtotal
-            table_data.append([p.get("nombre",""), str(int(cantidad)), f"${precio:.2f}", f"${subtotal:.2f}"])
 
-        table = Table(table_data, colWidths=[200, 80, 100, 100])
+        for p in productos_pagados:
+            nombre = p.get("nombre", "")
+            cantidad = float(p.get("cantidad", 0))
+            precio_unitario = float(p.get("precio_unitario", 0))
+            subtotal = cantidad * precio_unitario
+            total_pagado += subtotal
+
+            table_data.append([
+                nombre,
+                f"{cantidad:.0f}",
+                f"${precio_unitario:.2f}",
+                f"${subtotal:.2f}"
+            ])
+
+        # Agregar fila de total
+        table_data.append(["", "", "TOTAL:", f"${total_pagado:.2f}"])
+
+        table = Table(table_data, colWidths=[150, 80, 100, 100])
         table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.gray),
             ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),
             ('ALIGN',(1,1),(-1,-1),'CENTER'),
             ('GRID', (0,0), (-1,-1), 1, colors.black),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold')
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('BACKGROUND', (-1,-1), (-1,-1), colors.lightgrey),
+            ('FONTNAME', (-1,-1), (-1,-1), 'Helvetica-Bold')
         ]))
-        table.wrapOn(c, 50, table_y - 20)
-        table.drawOn(c, 50, table_y - len(table_data)*18)
 
-        # Totales
-        c.drawString(50, table_y - len(table_data)*18 - 20, f"Total Pagado: ${total_pagado:.2f}")
-        c.drawString(50, table_y - len(table_data)*18 - 40, f"Método de pago: {metodo_pago or 'N/A'}")
+        table.wrapOn(c, width, height)
+        table.drawOn(c, 40, current_y - len(table_data)*20 - 20)
+
+        # Observaciones
         if observaciones:
-            c.drawString(50, table_y - len(table_data)*18 - 60, f"Observaciones: {observaciones}")
+            current_y -= len(table_data)*20 + 40
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(40, current_y, "Observaciones:")
+            current_y -= 15
+            c.setFont("Helvetica", 9)
+            words = observaciones.split()
+            line = ""
+            for word in words:
+                if c.stringWidth(line + word, "Helvetica", 9) < 500:
+                    line += word + " "
+                else:
+                    c.drawString(40, current_y, line.strip())
+                    current_y -= 12
+                    line = word + " "
+            if line.strip():
+                c.drawString(40, current_y, line.strip())
 
         # Firmas
-        firma_y = table_y - len(table_data)*18 - 100
-        c.drawString(50, firma_y, "__________________________")
-        c.drawString(50, firma_y - 12, "Firma Cliente")
-        c.drawString(320, firma_y, "__________________________")
-        c.drawString(320, firma_y - 12, "Firma Vendedor / Responsable")
+        firma_y = current_y - 60
+        c.setFont("Helvetica", 10)
+        c.drawString(40, firma_y, "__________________________")
+        c.drawString(40, firma_y - 10, "Firma Cliente")
+        c.drawString(300, firma_y, "__________________________")
+        c.drawString(300, firma_y - 10, "Firma Vendedor")
 
-    # ---------------- Dibujar dos facturas en la misma hoja ----------------
+    # Dibujar dos copias en la misma hoja
     draw_factura(y_offset=0)
     c.setStrokeColor(colors.gray)
     c.setLineWidth(1)
-    c.line(40, height/2, width-40, height/2)  # línea divisoria
+    c.line(40, height/2, width-40, height/2)
     draw_factura(y_offset=height/2)
 
     c.showPage()
