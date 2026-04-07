@@ -1,12 +1,12 @@
 # backend/ventas.py
-from typing import  Dict, Optional
+from typing import Dict, Optional
 from datetime import datetime
-from sqlalchemy import text
-from backend.db import engine
-from .productos import  get_product, update_product, increment_stock
+from .db import get_connection
+from .productos import get_product, update_product, increment_stock
 from .logs import registrar_log
 import copy
 import json
+
 
 # ------------------------------
 # Registrar venta
@@ -16,19 +16,18 @@ def register_sale(cliente_id, total, pagado, usuario, tipo_pago, productos=None)
     Registra una venta, descuenta del inventario,
     guarda productos vendidos como JSON y calcula saldo automáticamente.
     """
-
-    fecha = datetime.now()
+    fecha = datetime.now().isoformat()
     total = float(total)
     pagado = float(pagado)
     saldo = total - pagado
 
     productos_data = []
 
-    with engine.begin() as conn:
-
-        # ----------------------------
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        
         # Procesar productos
-        # ----------------------------
         if productos:
             for item in productos:
                 prod_id = item.get("id_producto") or item.get("id")
@@ -44,7 +43,7 @@ def register_sale(cliente_id, total, pagado, usuario, tipo_pago, productos=None)
                     "subtotal": subtotal
                 })
 
-                # 🔹 Actualizar stock
+                # Actualizar stock
                 producto = get_product(prod_id)
                 if producto:
                     stock_actual = float(producto.get("cantidad", 0))
@@ -56,7 +55,6 @@ def register_sale(cliente_id, total, pagado, usuario, tipo_pago, productos=None)
                         )
 
                     nuevo_stock = stock_actual - cantidad_vendida
-
                     update_product(
                         prod_id,
                         nombre=producto["nombre"],
@@ -64,31 +62,17 @@ def register_sale(cliente_id, total, pagado, usuario, tipo_pago, productos=None)
                         precio=producto["precio"]
                     )
 
-        # ----------------------------
         # Insertar venta
-        # ----------------------------
-        query_venta = text("""
+        cursor.execute("""
             INSERT INTO ventas 
             (cliente_id, total, pagado, saldo, usuario, tipo_pago, fecha, productos_vendidos)
-            VALUES 
-            (:cliente_id, :total, :pagado, :saldo, :usuario, :tipo_pago, :fecha, :productos_vendidos)
-            RETURNING id
-        """)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (cliente_id, total, pagado, saldo, usuario, tipo_pago, fecha, json.dumps(productos_data)))
+        conn.commit()
 
-        venta_id = conn.execute(query_venta, {
-            "cliente_id": cliente_id,
-            "total": total,
-            "pagado": pagado,
-            "saldo": saldo,
-            "usuario": usuario,
-            "tipo_pago": tipo_pago,
-            "fecha": fecha,
-            "productos_vendidos": json.dumps(productos_data)
-        }).scalar()
+        venta_id = cursor.lastrowid
 
-        # ----------------------------
         # Registrar log
-        # ----------------------------
         registrar_log(
             usuario,
             "registrar_venta",
@@ -101,17 +85,19 @@ def register_sale(cliente_id, total, pagado, usuario, tipo_pago, productos=None)
             }
         )
 
-    return {
-        "id": venta_id,
-        "cliente_id": cliente_id,
-        "total": total,
-        "pagado": pagado,
-        "saldo": saldo,
-        "usuario": usuario,
-        "tipo_pago": tipo_pago,
-        "fecha": fecha,
-        "productos_vendidos": productos_data
-    }
+        return {
+            "id": venta_id,
+            "cliente_id": cliente_id,
+            "total": total,
+            "pagado": pagado,
+            "saldo": saldo,
+            "usuario": usuario,
+            "tipo_pago": tipo_pago,
+            "fecha": fecha,
+            "productos_vendidos": productos_data
+        }
+    finally:
+        conn.close()
 
 
 def editar_venta_extra(
@@ -123,30 +109,47 @@ def editar_venta_extra(
     chapa: Optional[str] = None,
     usuario: Optional[str] = None
 ):
-    with engine.begin() as conn:
-        update_query = text("""
-            UPDATE ventas
-            SET observaciones = COALESCE(:observaciones, observaciones),
-                vendedor = COALESCE(:vendedor, vendedor),
-                telefono_vendedor = COALESCE(:telefono_vendedor, telefono_vendedor),
-                chofer = COALESCE(:chofer, chofer),
-                chapa = COALESCE(:chapa, chapa)
-            WHERE id = :id
-            RETURNING *
-        """)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        
+        # Construir query dinámica según qué campos se pasen
+        updates = []
+        values = []
+        
+        if observaciones is not None:
+            updates.append("observaciones = ?")
+            values.append(observaciones)
+        if vendedor is not None:
+            updates.append("vendedor = ?")
+            values.append(vendedor)
+        if telefono_vendedor is not None:
+            updates.append("telefono_vendedor = ?")
+            values.append(telefono_vendedor)
+        if chofer is not None:
+            updates.append("chofer = ?")
+            values.append(chofer)
+        if chapa is not None:
+            updates.append("chapa = ?")
+            values.append(chapa)
+        
+        if not updates:
+            return None
+        
+        values.append(sale_id)
+        query = f"UPDATE ventas SET {', '.join(updates)} WHERE id = ?"
+        cursor.execute(query, values)
+        conn.commit()
 
-        updated = conn.execute(update_query, {
-            "id": sale_id,
-            "observaciones": observaciones,
-            "vendedor": vendedor,
-            "telefono_vendedor": telefono_vendedor,
-            "chofer": chofer,
-            "chapa": chapa
-        }).mappings().first()
+        # Obtener el registro actualizado
+        cursor.execute("SELECT * FROM ventas WHERE id = ?", (sale_id,))
+        updated = cursor.fetchone()
 
         if updated:
             registrar_log(usuario or "sistema", "editar_venta_extra", dict(updated))
             return dict(updated)
+    finally:
+        conn.close()
 
     return None
 
@@ -155,48 +158,58 @@ def editar_venta_extra(
 # Listar ventas
 # ----------------------------
 def list_sales():
-    query = text("SELECT * FROM ventas ORDER BY fecha DESC")
-    with engine.connect() as conn:
-        resultados = conn.execute(query).mappings().all()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM ventas ORDER BY fecha DESC")
+        resultados = cursor.fetchall()
+    finally:
+        conn.close()
 
     ventas_list = []
     for r in resultados:
-        productos_vendidos = r.get("productos_vendidos") or "[]"
+        r_dict = dict(r)
+        productos_vendidos = r_dict.get("productos_vendidos") or "[]"
+        
         if isinstance(productos_vendidos, str):
             try:
                 productos_vendidos = json.loads(productos_vendidos)
             except json.JSONDecodeError:
                 productos_vendidos = []
 
-        r_dict = dict(r)
         r_dict["productos_vendidos"] = productos_vendidos
         ventas_list.append(r_dict)
 
     return ventas_list
 
+
 def get_sale(sale_id: str) -> Optional[Dict]:
     """Devuelve una venta por su ID"""
-    query = text("SELECT * FROM ventas WHERE id = :id")
-    with engine.connect() as conn:
-        result = conn.execute(query, {"id": sale_id}).mappings().first()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM ventas WHERE id = ?", (sale_id,))
+        result = cursor.fetchone()
+    finally:
+        conn.close()
 
     if result:
         r = dict(result)
         productos = r.get("productos_vendidos")
 
-        # ✅ Solo hacer json.loads si es string
+        # Solo hacer json.loads si es string
         if isinstance(productos, str):
             try:
                 r["productos_vendidos"] = json.loads(productos)
             except json.JSONDecodeError:
                 r["productos_vendidos"] = []
         else:
-            # Si ya es lista/dict, dejarlo como está
             r["productos_vendidos"] = productos or []
 
         return r
 
     return None
+
 
 def delete_sale(sale_id: str, usuario: Optional[str] = None) -> bool:
     """Elimina una venta por su ID y devuelve productos al stock"""
@@ -208,11 +221,15 @@ def delete_sale(sale_id: str, usuario: Optional[str] = None) -> bool:
     for item in sale.get("productos_vendidos", []):
         increment_stock(item["id_producto"], item["cantidad"])
 
-    # Eliminar la venta de la BD
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM ventas WHERE id = :id"), {"id": sale_id})
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ventas WHERE id = ?", (sale_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
-    # 🔹 Preparar datos para el log sin que falle JSON
+    # Preparar datos para el log
     log_detalles = copy.deepcopy(sale)
 
     # Convertir cualquier lista/dict anidado a string JSON
@@ -224,21 +241,11 @@ def delete_sale(sale_id: str, usuario: Optional[str] = None) -> bool:
 
     return True
 
+
 def listar_ventas_dict():
     ventas = list_sales()
     ventas_dict = {f"ID {v['id']} - Cliente {v['cliente_id']} - Total ${v['total']}": v for v in ventas}
     return ventas_dict
-
-
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle
-from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
-from io import BytesIO
-import os
-
-def generar_factura_pdf(venta, cliente, productos_vendidos, gestor_info=None, logo_path="assets/logo.png"):
     """
     Genera una factura profesional en PDF mostrando todos los productos de la venta,
     duplicada en la misma hoja (para cliente y archivo interno).
