@@ -1,116 +1,164 @@
-# backend/ventas.py
-from typing import Dict, Optional
-from datetime import datetime
-from .db import get_connection
-from .productos import get_product, update_product, increment_stock
-from .logs import registrar_log
-import copy
 import json
+from datetime import datetime
+from typing import Dict, Optional, List
 
-# ------------------------------
-# Registrar venta
-# ----------------------------
-def register_sale(cliente_id, total, pagado, usuario, tipo_pago, productos=None):
-    """
-    Registra una venta, descuenta del inventario,
-    guarda productos vendidos como JSON y calcula saldo automáticamente.
-    """
+from backend.db import get_connection
+from backend.logs import registrar_log
 
-    fecha = datetime.now()
+
+# =========================================================
+# 🛒 REGISTRAR VENTA (ROBUSTO + STOCK SEGURO)
+# =========================================================
+def register_sale(
+    cliente_id: int,
+    total: float,
+    pagado: float,
+    usuario: str,
+    tipo_pago: str,
+    productos: List[Dict]
+):
+
+    if not productos:
+        raise ValueError("No hay productos en la venta")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
     total = float(total)
     pagado = float(pagado)
     saldo = total - pagado
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    productos_data = []
-
-    conn = get_connection()
     try:
-        cursor = conn.cursor()
-
-        # ----------------------------
-        # Procesar productos
-        # ----------------------------
-        if productos:
-            for item in productos:
-                prod_id = item.get("id_producto") or item.get("id")
-                cantidad_vendida = float(item.get("cantidad", 0))
-                precio_unitario = float(item.get("precio_unitario", 0))
-                subtotal = cantidad_vendida * precio_unitario
-
-                productos_data.append({
-                    "id_producto": prod_id,
-                    "nombre": item.get("nombre"),
-                    "cantidad": cantidad_vendida,
-                    "precio_unitario": precio_unitario,
-                    "subtotal": subtotal
-                })
-
-                # 🔹 Actualizar stock
-                producto = get_product(prod_id)
-                if producto:
-                    stock_actual = float(producto.get("cantidad", 0))
-
-                    if cantidad_vendida > stock_actual:
-                        raise ValueError(
-                            f"Stock insuficiente para {producto.get('nombre')}. "
-                            f"Disponible: {stock_actual}"
-                        )
-
-                    nuevo_stock = stock_actual - cantidad_vendida
-
-                    update_product(
-                        prod_id,
-                        nombre=producto["nombre"],
-                        cantidad=nuevo_stock,
-                        precio=producto["precio"]
-                    )
-
-        # ----------------------------
-        # Insertar venta
-        # ----------------------------
-        cursor.execute("""
-            INSERT INTO ventas 
-            (cliente_id, total, pagado, saldo, usuario, tipo_pago, fecha, productos_vendidos)
-            VALUES 
-            (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (cliente_id, total, pagado, saldo, usuario, tipo_pago, fecha, json.dumps(productos_data)))
-        conn.commit()
-        
-        venta_id = cursor.lastrowid
-
-        # ----------------------------
-        # Registrar log
-        # ----------------------------
-        registrar_log(
-            usuario,
-            "registrar_venta",
-            {
-                "venta_id": venta_id,
-                "cliente_id": cliente_id,
-                "total": total,
-                "pagado": pagado,
-                "saldo": saldo
-            }
+        # =====================================================
+        # VALIDAR IDs DE PRODUCTOS
+        # =====================================================
+        ids = tuple(
+            p.get("id_producto") or p.get("id")
+            for p in productos
         )
+
+        if not ids:
+            raise ValueError("Productos inválidos")
+
+        query = f"""
+            SELECT id, nombre, cantidad, precio
+            FROM productos
+            WHERE id IN ({','.join(['?'] * len(ids))})
+        """
+
+        productos_db = cursor.execute(query, ids).fetchall()
+        productos_map = {p[0]: p for p in productos_db}
+
+        productos_final = []
+
+        for item in productos:
+
+            prod_id = item.get("id_producto") or item.get("id")
+            cantidad = float(item.get("cantidad"))
+            precio = float(item.get("precio_unitario"))
+
+            if prod_id not in productos_map:
+                raise ValueError(f"Producto ID {prod_id} no existe")
+
+            producto = productos_map[prod_id]
+            stock = float(producto[2])
+
+            if cantidad <= 0:
+                raise ValueError("Cantidad inválida")
+
+            if cantidad > stock:
+                raise ValueError(
+                    f"Stock insuficiente para {producto[1]} (Disponible: {stock})"
+                )
+
+            productos_final.append({
+                "id_producto": prod_id,
+                "nombre": producto[1],
+                "cantidad": cantidad,
+                "precio_unitario": precio,
+                "subtotal": round(cantidad * precio, 2)
+            })
+
+        # =====================================================
+        # DESCONTAR STOCK (SEGURO)
+        # =====================================================
+        for p in productos_final:
+
+            cursor.execute("""
+                UPDATE productos
+                SET cantidad = cantidad - ?
+                WHERE id = ? AND cantidad >= ?
+            """, (
+                p["cantidad"],
+                p["id_producto"],
+                p["cantidad"]
+            ))
+
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Stock insuficiente (concurrencia) producto {p['id_producto']}"
+                )
+
+        # =====================================================
+        # INSERTAR VENTA (AJUSTADO A NUEVA TABLA)
+        # =====================================================
+        cursor.execute("""
+            INSERT INTO ventas (
+                cliente_id,
+                fecha,
+                pagado,
+                saldo,
+                productos_vendidos,
+                total,
+                tipo_pago,
+                usuario
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            cliente_id,
+            fecha,
+            pagado,
+            saldo,
+            json.dumps(productos_final),
+            total,
+            tipo_pago,
+            usuario
+        ))
+
+        venta_id = cursor.lastrowid
+        
+
+        conn.commit()
+
+        registrar_log(usuario, "registrar_venta", {
+            "venta_id": venta_id,
+            "cliente_id": cliente_id,
+            "total": total,
+            "pagado": pagado,
+            "saldo": saldo
+        })
+
+        return {
+            "id": venta_id,
+            "cliente_id": cliente_id,
+            "total": total,
+            "pagado": pagado,
+            "saldo": saldo,
+            "productos": productos_final
+        }
+
+    except Exception as e:
+        conn.rollback()
+        raise e
 
     finally:
         conn.close()
-
-    return {
-        "id": venta_id,
-        "cliente_id": cliente_id,
-        "total": total,
-        "pagado": pagado,
-        "saldo": saldo,
-        "usuario": usuario,
-        "tipo_pago": tipo_pago,
-        "fecha": fecha,
-        "productos_vendidos": productos_data
-    }
-
-
+# =========================================================
+# ✏️ EDITAR CAMPOS EXTRA
+# =========================================================
 def editar_venta_extra(
-    sale_id: str,
+    sale_id: int,
     observaciones: Optional[str] = None,
     vendedor: Optional[str] = None,
     telefono_vendedor: Optional[str] = None,
@@ -118,144 +166,259 @@ def editar_venta_extra(
     chapa: Optional[str] = None,
     usuario: Optional[str] = None
 ):
+
     conn = get_connection()
+    cursor = conn.cursor()
+
     try:
-        cursor = conn.cursor()
-        
-        # Construir UPDATE dinámico
-        updates = []
-        values = []
-        
-        if observaciones is not None:
-            updates.append("observaciones = ?")
-            values.append(observaciones)
-        if vendedor is not None:
-            updates.append("vendedor = ?")
-            values.append(vendedor)
-        if telefono_vendedor is not None:
-            updates.append("telefono_vendedor = ?")
-            values.append(telefono_vendedor)
-        if chofer is not None:
-            updates.append("chofer = ?")
-            values.append(chofer)
-        if chapa is not None:
-            updates.append("chapa = ?")
-            values.append(chapa)
-        
-        if not updates:
-            return None
-        
-        values.append(sale_id)
-        
-        query = f"UPDATE ventas SET {', '.join(updates)} WHERE id = ?"
-        cursor.execute(query, values)
+        cursor.execute("""
+            UPDATE ventas
+            SET observaciones = COALESCE(?, observaciones),
+                vendedor = COALESCE(?, vendedor),
+                telefono_vendedor = COALESCE(?, telefono_vendedor),
+                chofer = COALESCE(?, chofer),
+                chapa = COALESCE(?, chapa)
+            WHERE id = ?
+        """, (
+            observaciones,
+            vendedor,
+            telefono_vendedor,
+            chofer,
+            chapa,
+            sale_id
+        ))
+
         conn.commit()
 
-        # Obtener la venta actualizada
-        cursor.execute("SELECT * FROM ventas WHERE id = ?", (sale_id,))
-        updated = cursor.fetchone()
+        registrar_log(usuario or "system", "editar_venta_extra", {
+            "venta_id": sale_id
+        })
 
-        if updated:
-            updated_dict = dict(updated)
-            registrar_log(usuario or "sistema", "editar_venta_extra", updated_dict)
-            return updated_dict
+        return True
 
-        return None
+    except Exception:
+        conn.rollback()
+        raise
+
     finally:
         conn.close()
 
 
-# ----------------------------
-# Listar ventas
-# ----------------------------
+# =========================================================
+# 📋 LISTAR VENTAS
+# =========================================================
 def list_sales():
+
     conn = get_connection()
+    cursor = conn.cursor()
+
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM ventas ORDER BY fecha DESC")
-        resultados = cursor.fetchall()
+        rows = cursor.execute("""
+            SELECT * FROM ventas ORDER BY fecha DESC
+        """).fetchall()
 
-        ventas_list = []
-        for r in resultados:
-            r_dict = dict(r)
-            productos_vendidos = r_dict.get("productos_vendidos") or "[]"
-            if isinstance(productos_vendidos, str):
-                try:
-                    productos_vendidos = json.loads(productos_vendidos)
-                except json.JSONDecodeError:
-                    productos_vendidos = []
+        ventas = []
 
-            r_dict["productos_vendidos"] = productos_vendidos
-            ventas_list.append(r_dict)
+        for r in rows:
 
-        return ventas_list
+            try:
+                productos = json.loads(r[6]) if r[6] else []
+            except:
+                productos = []
+
+            ventas.append({
+                "id": r[0],
+                "cliente_id": r[1],
+                "fecha": r[2],
+                "subtotal": r[3],
+                "pagado": r[4],
+                "saldo": r[5],
+                "productos_vendidos": productos,
+                "total": r[7],
+                "tipo_pago": r[8],
+                "usuario": r[9],
+                "observaciones": r[10],
+                "vendedor": r[11],
+                "telefono_vendedor": r[12],
+                "chofer": r[13],
+                "chapa": r[14]
+            })
+
+        return ventas
+
     finally:
         conn.close()
 
-def get_sale(sale_id: str) -> Optional[Dict]:
-    """Devuelve una venta por su ID"""
+
+# =========================================================
+# 🔍 OBTENER VENTA
+# =========================================================
+def get_sale(sale_id: int):
+
     conn = get_connection()
+    cursor = conn.cursor()
+
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM ventas WHERE id = ?", (sale_id,))
-        result = cursor.fetchone()
+        r = cursor.execute("""
+            SELECT * FROM ventas WHERE id = ?
+        """, (sale_id,)).fetchone()
 
-        if result:
-            r = dict(result)
-            productos = r.get("productos_vendidos")
+        if not r:
+            return None
 
-            # ✅ Solo hacer json.loads si es string
-            if isinstance(productos, str):
-                try:
-                    r["productos_vendidos"] = json.loads(productos)
-                except json.JSONDecodeError:
-                    r["productos_vendidos"] = []
-            else:
-                # Si ya es lista/dict, dejarlo como está
-                r["productos_vendidos"] = productos or []
+        try:
+            productos = json.loads(r[6]) if r[6] else []
+        except:
+            productos = []
 
-            return r
+        return {
+            "id": r[0],
+            "cliente_id": r[1],
+            "fecha": r[2],
+            "subtotal": r[3],
+            "pagado": r[4],
+            "saldo": r[5],
+            "productos_vendidos": productos,
+            "total": r[7],
+            "tipo_pago": r[8],
+            "usuario": r[9],
+            "observaciones": r[10],
+            "vendedor": r[11],
+            "telefono_vendedor": r[12],
+            "chofer": r[13],
+            "chapa": r[14]
+        }
 
-        return None
     finally:
         conn.close()
 
-def delete_sale(sale_id: str, usuario: Optional[str] = None) -> bool:
-    """Elimina una venta por su ID y devuelve productos al stock"""
-    sale = get_sale(sale_id)
-    if not sale:
-        return False
 
-    # Devolver productos al stock
-    for item in sale.get("productos_vendidos", []):
-        increment_stock(item["id_producto"], item["cantidad"])
+# =========================================================
+# 💵 ACTUALIZAR PAGO (CRÍTICO PARA DEUDAS)
+# =========================================================
+def update_sale_payment(sale_id: int, pagado: float, saldo: float):
 
-    # Eliminar la venta de la BD
     conn = get_connection()
+    cursor = conn.cursor()
+
     try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM ventas WHERE id = ?", (sale_id,))
+        cursor.execute("""
+            UPDATE ventas
+            SET pagado = ?,
+                saldo = ?
+            WHERE id = ?
+        """, (pagado, saldo, sale_id))
+
         conn.commit()
+        return True
+
+    except Exception:
+        conn.rollback()
+        raise
+
     finally:
         conn.close()
 
-    # 🔹 Preparar datos para el log sin que falle JSON
-    log_detalles = copy.deepcopy(sale)
 
-    # Convertir cualquier lista/dict anidado a string JSON
-    for key, value in log_detalles.items():
-        if isinstance(value, (list, dict)):
-            log_detalles[key] = json.dumps(value)
+# =========================================================
+# 🗑️ ELIMINAR VENTA (STOCK + DEUDA + CONSISTENCIA TOTAL)
+# =========================================================
+def delete_sale(sale_id: int, usuario: str = None):
 
-    registrar_log(usuario or "sistema", "eliminar_venta", {"venta_id": sale_id, "venta": log_detalles})
+    conn = get_connection()
+    cursor = conn.cursor()
 
-    return True
+    try:
 
+        sale = get_sale(sale_id)
+
+        if not sale:
+            return False
+
+        cliente_id = sale["cliente_id"]
+
+        # =================================================
+        # 🔥 RESTAURAR STOCK
+        # =================================================
+        for item in sale["productos_vendidos"]:
+
+            cursor.execute("""
+                UPDATE productos
+                SET cantidad = cantidad + ?
+                WHERE id = ?
+            """, (
+                item["cantidad"],
+                item["id_producto"]
+            ))
+
+        # =================================================
+        # 🔍 ELIMINAR DEUDA SI EXISTE
+        # =================================================
+        cursor.execute("""
+            SELECT id, monto_total
+            FROM deudas
+            WHERE venta_id = ?
+        """, (sale_id,))
+
+        deuda = cursor.fetchone()
+
+        if deuda:
+
+            deuda_id = deuda[0]
+            monto = float(deuda[1] or 0)
+
+            cursor.execute("""
+                DELETE FROM deudas_detalle
+                WHERE deuda_id = ?
+            """, (deuda_id,))
+
+            cursor.execute("""
+                DELETE FROM deudas
+                WHERE id = ?
+            """, (deuda_id,))
+
+            cursor.execute("""
+                UPDATE clientes
+                SET deuda_total = deuda_total - ?
+                WHERE id = ?
+            """, (monto, cliente_id))
+
+        # =================================================
+        # 🗑️ ELIMINAR VENTA
+        # =================================================
+        cursor.execute("""
+            DELETE FROM ventas
+            WHERE id = ?
+        """, (sale_id,))
+
+        conn.commit()
+
+        registrar_log(usuario or "system", "eliminar_venta", {
+            "venta_id": sale_id,
+            "cliente_id": cliente_id
+        })
+
+        return True
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+# =========================================================
+# 📊 UTILIDAD UI
+# =========================================================
 def listar_ventas_dict():
-    ventas = list_sales()
-    ventas_dict = {f"ID {v['id']} - Cliente {v['cliente_id']} - Total ${v['total']}": v for v in ventas}
-    return ventas_dict
 
+    ventas = list_sales()
+
+    return {
+        f"ID {v['id']} - Cliente {v['cliente_id']} - ${v['total']}": v
+        for v in ventas
+    }
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors

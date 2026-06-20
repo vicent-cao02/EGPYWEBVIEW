@@ -8,8 +8,8 @@ from .usuarios import (
 )
 
 from .productos import (
-    list_products, get_product, guardar_producto,
-    adjust_stock, update_product, eliminar_producto, editar_producto
+    list_products, get_product,
+    adjust_stock, eliminar_producto, editar_producto
 )
 
 from .clientes import (

@@ -1,288 +1,374 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-from backend import clientes, productos, deudas
+import uuid
+import os
+import sys
+import datetime
+import subprocess
+import platform
 
-# ===============================
-# SESSION STATE INICIALIZACIÓN
-# ===============================
-if "usuario" not in st.session_state or st.session_state.usuario is None:
-    st.warning("Debes iniciar sesión para acceder a esta página.")
+from pathlib import Path
+from backend import clientes, productos, deudas
+from backend.deudas import generar_factura_pago_deuda
+
+
+# =========================================================
+# 🔐 VALIDACIÓN DE SESIÓN
+# =========================================================
+if "usuario" not in st.session_state or not st.session_state.usuario:
+    st.warning("Debes iniciar sesión para acceder.")
     st.stop()
 
-if "pdf_comprobantes_lista" not in st.session_state:
-    st.session_state["pdf_comprobantes_lista"] = []  # Lista de dicts: {"nombre": ..., "data": ...}
 
-# ===============================
-# CACHÉ PARA RENDIMIENTO
-# ===============================
-@st.cache_data(ttl=30)
+# =========================================================
+# 📦 SESSION STATE
+# =========================================================
+if "refresh" not in st.session_state:
+    st.session_state.refresh = False
+
+
+# =========================================================
+# ⚡ CACHÉ
+# =========================================================
+@st.cache_data(ttl=60)
 def load_clientes_con_deuda():
     return deudas.list_clientes_con_deuda() or []
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def load_productos_map():
     return productos.map_productos() or {}
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=60)
 def load_deudas_cliente(cid: int):
     return deudas.debts_by_client(cid) or []
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=60)
 def load_detalle_deudas():
     return deudas.list_detalle_deudas() or []
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def load_clientes_dict():
     lista = clientes.list_clients() or []
     return {c["id"]: c["nombre"] for c in lista}
 
-# ===============================
-# CONFIGURACIÓN PÁGINA
-# ===============================
-st.set_page_config(page_title="💳 Gestión de Deudas", layout="wide")
+
+# =========================================================
+# ⚙️ CONFIGURACIÓN
+# =========================================================
+st.set_page_config(page_title="Gestión de Deudas", layout="wide")
 st.title("💳 Gestión de Deudas")
 
-# ===============================
-# CARGA DE DATOS
-# ===============================
+
+# =========================================================
+# 📁 EXPORTS
+# =========================================================
+
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent
+
+EXPORTS_DIR = BASE_DIR / "exports"
+
+PDF_DIR = EXPORTS_DIR / "pdf"
+EXCEL_DIR = EXPORTS_DIR / "excel"
+
+PDF_DIR.mkdir(parents=True, exist_ok=True)
+EXCEL_DIR.mkdir(parents=True, exist_ok=True)
+
+# =========================================================
+# 📊 CARGA DE DATOS
+# =========================================================
 clientes_con_deuda = load_clientes_con_deuda()
 productos_map = load_productos_map()
 clientes_dict = load_clientes_dict()
-clientes_opciones = {c["nombre"]: c["id"] for c in clientes_con_deuda}
-lista_nombres = [""] + list(clientes_opciones.keys())
 
-# ===============================
-# SELECTOR DE CLIENTE
-# ===============================
-st.subheader("👤 Selecciona un cliente con deuda")
-seleccion_cliente = st.selectbox("Clientes con deuda:", lista_nombres)
+clientes_opciones = {c["nombre"]: c["id"] for c in clientes_con_deuda}
+lista_nombres = list(clientes_opciones.keys())
+
+
+# =========================================================
+# 👤 SELECCIÓN CLIENTE
+# =========================================================
+st.subheader("Seleccionar cliente")
+
+seleccion_cliente = st.selectbox("Clientes con deuda", [""] + lista_nombres)
 
 if seleccion_cliente:
+
     cliente_id = clientes_opciones[seleccion_cliente]
     cliente_obj = clientes.get_client(cliente_id)
+
     deuda_total = float(cliente_obj.get("deuda_total", 0) or 0)
 
     st.markdown(
-        f"<h4>💰 Deuda total de {seleccion_cliente}: "
-        f"<span style='color:#c0392b;'>${deuda_total:,.2f}</span></h4>",
-        unsafe_allow_html=True
+        f"### Deuda total: **${deuda_total:,.2f}**"
     )
 
-    # ===============================
-    # CARGAR DEUDAS PENDIENTES DEL CLIENTE
-    # ===============================
+
+    # =====================================================
+    # 📌 DEUDAS DEL CLIENTE
+    # =====================================================
     deudas_cliente = load_deudas_cliente(cliente_id)
-    filas_pendientes = []
+
+    filas = []
 
     for deuda in deudas_cliente:
         for det in deuda.get("detalles", []):
+
             if (det.get("estado") or "").lower() != "pendiente":
                 continue
-            cantidad = float(det.get("cantidad") or 0)
-            precio_unitario = float(det.get("precio_unitario") or 0)
-            monto_pendiente = cantidad * precio_unitario
 
-            filas_pendientes.append({
+            cantidad = float(det.get("cantidad") or 0)
+            precio = float(det.get("precio_unitario") or 0)
+
+            filas.append({
                 "deuda_id": deuda.get("deuda_id"),
-                "Detalle ID": det.get("id"),
-                "Producto ID": det.get("producto_id"),
-                "Producto": productos_map.get(det.get("producto_id"), "Producto"),
-                "Cantidad": cantidad,
-                "Precio Unitario": round(precio_unitario, 2),
-                "Monto Pendiente": round(monto_pendiente, 2),
-                "Fecha": str(deuda.get("fecha"))[:19],
+                "detalle_id": det.get("id"),
+                "producto_id": det.get("producto_id"),
+                "producto": productos_map.get(det.get("producto_id"), "Producto"),
+                "cantidad": cantidad,
+                "precio": precio,
+                "monto": cantidad * precio,
+                "fecha": str(deuda.get("fecha"))[:19]
             })
 
-    df_pendientes = pd.DataFrame(filas_pendientes)
+    df = pd.DataFrame(filas)
 
-    st.subheader("📋 Deudas Pendientes del Cliente")
-    if df_pendientes.empty:
-        st.info("✔ Este cliente no tiene deudas pendientes.")
+
+    # =====================================================
+    # 📋 TABLA
+    # =====================================================
+    st.subheader("Deudas pendientes")
+
+    if df.empty:
+        st.info("No hay deudas pendientes.")
     else:
         st.dataframe(
-            df_pendientes[["Producto","Cantidad", "Precio Unitario", "Monto Pendiente", "Fecha"]]
-            .sort_values("Fecha", ascending=False)
-            .style.format({
-                "Cantidad": "{:,.0f}",
-                "Precio Unitario": "${:,.2f}",
-                "Monto Pendiente": "${:,.2f}"
-            }),
+            df.sort_values("fecha", ascending=False)[
+                ["producto", "cantidad", "precio", "monto", "fecha"]
+            ],
             use_container_width=True,
-            height=200
+            height=250
         )
 
-        # ===============================
-        # SELECTOR DE DEUDA A PAGAR
-        # ===============================
-        opciones_deuda = {
-            f"{row['Producto']} - {row['Fecha']} (${row['Monto Pendiente']:,.2f})": row
-            for _, row in df_pendientes.iterrows()
+
+        # =================================================
+        # 💳 SELECCIÓN DE PAGO
+        # =================================================
+        opciones = {
+            f"{r['producto']} | {r['fecha']} | ${r['monto']:.2f}": r
+            for _, r in df.iterrows()
         }
-        lista_opciones = list(opciones_deuda.keys())
-        seleccion_detalle = st.selectbox("Selecciona una deuda pendiente:", [""] + lista_opciones)
 
-        if seleccion_detalle:
-            detalle = opciones_deuda[seleccion_detalle]
-            monto_actual = detalle["Monto Pendiente"]
-            detalle_id = detalle["Detalle ID"]
+        seleccion = st.selectbox(
+            "Selecciona deuda a pagar",
+            [""] + list(opciones.keys())
+        )
 
-            st.markdown(f"### 💵 Monto pendiente de la deuda: **${monto_actual:,.2f}**")
 
-            key_num_input = f"monto_pago_{cliente_id}_{detalle_id}"
-            key_btn = f"btn_pagar_{cliente_id}_{detalle_id}"
+        if seleccion:
+
+            detalle = opciones[seleccion]
+
+            st.markdown(f"### Monto: ${detalle['monto']:.2f}")
 
             monto_pago = st.number_input(
                 "Monto a pagar",
                 min_value=0.01,
-                max_value=monto_actual,
-                value=monto_actual,
-                step=0.01,
-                key=key_num_input
+                max_value=float(detalle["monto"]),
+                value=float(detalle["monto"])
             )
 
-            if st.button(f"💳 Registrar pago (${monto_pago:,.2f})", key=key_btn):
+
+            # =================================================
+            # 💰 PROCESO DE PAGO
+            # =================================================
+            if st.button("Registrar pago"):
+
                 try:
-                    # 🔹 Registrar pago
                     deudas.pay_debt_producto(
                         deuda_id=detalle["deuda_id"],
-                        producto_id=detalle["Producto ID"],
+                        producto_id=detalle["producto_id"],
                         monto_pago=monto_pago,
-                        usuario=st.session_state.get("usuario", "desconocido")
+                        usuario=st.session_state.usuario
                     )
-                    st.success(f"💰 Pago de ${monto_pago:,.2f} registrado correctamente.")
 
-                    # 🔹 Generar PDF inmediatamente para este detalle
-                    detalle_factura = [{
-                        "nombre": detalle["Producto"],
-                        "cantidad": float(detalle.get("Cantidad", 0)),
-                        "precio_unitario": float(detalle.get("Precio Unitario", 0))
+                    # 📄 Generar factura
+                    factura = [{
+                        "nombre": detalle["producto"],
+                        "cantidad": detalle["cantidad"],
+                        "precio_unitario": detalle["precio"]
                     }]
 
-                    from backend.deudas import generar_factura_pago_deuda
-                    pdf_bytes = generar_factura_pago_deuda(cliente_obj, detalle_factura)
+                    pdf = generar_factura_pago_deuda(
+                        cliente_obj,
+                        factura
+                    )
 
-                    if pdf_bytes and isinstance(pdf_bytes, (bytes, bytearray)):
-                        nombre_pdf = f"ComprobantePago_{detalle['deuda_id']}_{detalle_id}.pdf"
-                        st.session_state["pdf_comprobantes_lista"].append({
-                            "nombre": nombre_pdf,
-                            "data": pdf_bytes
-                        })
-                        st.success(f"📄 Comprobante generado: {nombre_pdf}")
+                    # =====================================================
+                    # 📁 GUARDAR PDF
+                    # =====================================================
 
-                    # Limpiar caches
-                    load_deudas_cliente.clear()
-                    load_detalle_deudas.clear()
-                    load_clientes_con_deuda.clear()
+                    timestamp = datetime.datetime.now().strftime(
+                        "%Y%m%d_%H%M%S"
+                    )
 
-                    # 🔄 Forzar rerun para que se muestre botón inmediatamente
+                    pdf_filename = (
+                        f"Pago_Deuda_{detalle['deuda_id']}_{timestamp}.pdf"
+                    )
+
+                    pdf_path = PDF_DIR / pdf_filename
+
+                    with open(pdf_path, "wb") as f:
+                        f.write(pdf)
+
+                    st.success("✅ Comprobante PDF guardado correctamente")
+
+                    st.info(f"📁 {pdf_path}")
+
+                    # =====================================================
+                    # 🚀 ABRIR PDF AUTOMÁTICAMENTE
+                    # =====================================================
+
+                    sistema = platform.system()
+
+                    if sistema == "Windows":
+
+                        os.startfile(pdf_path)
+
+                    elif sistema == "Darwin":
+
+                        subprocess.call([
+                            "open",
+                            str(pdf_path)
+                        ])
+
+                    else:
+
+                        subprocess.call([
+                            "xdg-open",
+                            str(pdf_path)
+                        ])
+                    # 🔄 limpiar cache
+                    st.cache_data.clear()
+
+                    st.success("Pago registrado correctamente")
                     st.rerun()
 
                 except Exception as e:
-                    st.error(f"❌ Error al registrar el pago: {str(e)}")
+                    st.error(f"Error: {str(e)}")
 
-## =========================================
-# 📥 Selector de Comprobantes Generados
-# =========================================
-st.subheader("📥 Comprobantes Generados")
 
-# Inicializar lista si no existe
-if "pdf_comprobantes_lista" not in st.session_state:
-    st.session_state["pdf_comprobantes_lista"] = []
 
-# 🔹 Generar comprobante doble y agregarlo a la lista
-if "detalle_factura" in st.session_state and "cliente_obj" in st.session_state:
-    detalle = st.session_state.get("detalle_actual")  # Deuda actual seleccionada
-    cliente_obj = st.session_state.get("cliente_obj")
-    detalle_factura = st.session_state.get("detalle_factura")
+st.divider()
+st.subheader("Comprobantes generados")
 
-    if detalle and cliente_obj and detalle_factura:
-        pdf_bytes = generar_factura_pago_deuda(
-            cliente=cliente_obj,
-            productos_pagados=detalle_factura,
-            deuda_id=detalle["deuda_id"],
-            fecha_pago="15/02/2026",
-            usuario=st.session_state.get("usuario","desconocido"),
-            metodo_pago="Efectivo",
-            observaciones="Pago completo de la deuda"
-        )
 
-        # Guardar en session_state
-        st.session_state["pdf_comprobantes_lista"].append({
-            "nombre": f"Comprobante_{detalle['deuda_id']}.pdf",
-            "data": pdf_bytes
-        })
+if st.session_state.comprobantes:
 
-# Mostrar lista de comprobantes
-if st.session_state["pdf_comprobantes_lista"]:
-    # Invertir la lista para que la última factura aparezca primero
-    pdfs_invertidos = list(reversed(st.session_state["pdf_comprobantes_lista"]))
+    for pdf in reversed(st.session_state.comprobantes):
 
-    # Crear diccionario para selectbox
-    opciones = {pdf["nombre"]: idx for idx, pdf in enumerate(pdfs_invertidos)}
-    seleccion = st.selectbox("Selecciona un comprobante para descargar:", [""] + list(opciones.keys()))
-    
-    if seleccion:
-        idx_pdf = opciones[seleccion]
-        pdf = pdfs_invertidos[idx_pdf]
-        
-        st.download_button(
-            label=f"📄 Descargar {pdf['nombre']}",
-            data=pdf["data"],
-            file_name=pdf["nombre"],
-            mime="application/pdf",
-            key=f"download_pdf_{idx_pdf}"
-        )
+        if st.button("📥 Generar Excel"):
+
+            try:
+
+                timestamp = datetime.datetime.now().strftime(
+                    "%Y%m%d_%H%M%S"
+                )
+
+                excel_filename = (
+                    f"Deudas_{timestamp}.xlsx"
+                )
+
+                excel_path = EXCEL_DIR / excel_filename
+
+                with open(excel_path, "wb") as f:
+                    f.write(buffer.getvalue())
+
+                st.success("✅ Excel generado correctamente")
+
+                st.info(f"📁 {excel_path}")
+
+                # =============================================
+                # 🚀 ABRIR AUTOMÁTICAMENTE
+                # =============================================
+
+                sistema = platform.system()
+
+                if sistema == "Windows":
+
+                    os.startfile(excel_path)
+
+                elif sistema == "Darwin":
+
+                    subprocess.call([
+                        "open",
+                        str(excel_path)
+                    ])
+
+                else:
+
+                    subprocess.call([
+                        "xdg-open",
+                        str(excel_path)
+                    ])
+
+            except Exception as e:
+
+                st.error(f"Error generando Excel: {str(e)}")
+
 else:
-    st.info("✔ Aún no se han generado comprobantes de pago.")
+    st.info("No hay comprobantes generados.")
 
-# ===============================
-# TABLA GENERAL DE TODAS LAS DEUDAS PENDIENTES
-# ===============================
-st.subheader("📊 Todas las Deudas Pendientes")
-detalles_totales = load_detalle_deudas()
+
+# =========================================================
+# 📊 TODAS LAS DEUDAS
+# =========================================================
+st.divider()
+st.subheader("Todas las deudas pendientes")
+
+
+detalles = load_detalle_deudas()
+
 filas = []
 
-for d in detalles_totales:
-    if str(d.get("estado", "pendiente")).lower() != "pendiente":
+for d in detalles:
+
+    if str(d.get("estado", "")).lower() != "pendiente":
         continue
+
     cantidad = float(d.get("cantidad") or 0)
-    precio_unitario = float(d.get("precio_unitario") or 0)
-    monto_total = cantidad * precio_unitario
+    precio = float(d.get("precio_unitario") or 0)
 
     filas.append({
-        "Cliente": clientes_dict.get(d.get("cliente_id"), "Desconocido"),
-        "Deuda ID": d.get("deuda_id"),
-        "Producto": productos_map.get(d.get("producto_id"), "Producto"),
-        "Cantidad": round(cantidad, 2),
-        "Precio Unitario": round(precio_unitario, 2),
-        "Monto Total": round(monto_total, 2),
-        "Fecha": str(d.get("fecha"))[:19]
+        "cliente": clientes_dict.get(d.get("cliente_id"), "Desconocido"),
+        "producto": productos_map.get(d.get("producto_id"), "Producto"),
+        "cantidad": cantidad,
+        "precio": precio,
+        "monto": cantidad * precio,
+        "fecha": str(d.get("fecha"))[:19]
     })
 
-df_general = pd.DataFrame(filas)
 
-if df_general.empty:
-    st.info("✔ No hay deudas pendientes.")
+df_all = pd.DataFrame(filas)
+
+
+if df_all.empty:
+    st.info("No hay deudas pendientes.")
 else:
-    st.dataframe(
-        df_general.sort_values(["Fecha", "Cliente"], ascending=[False, True])
-        .style.format({
-            "Cantidad": "{:,.0f}",
-            "Precio Unitario": "${:,.2f}",
-            "Monto Total": "${:,.2f}"
-        }),
-        use_container_width=True,
-        height=400
-    )
+    st.dataframe(df_all, use_container_width=True, height=400)
 
-    # Exportar Excel
+    # 📥 Excel
     buffer = BytesIO()
+
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-        df_general.to_excel(writer, index=False, sheet_name="DeudasPendientes")
+        df_all.to_excel(writer, index=False, sheet_name="Deudas")
+
     st.download_button(
-        "⬇️ Descargar Excel General",
+        "Descargar Excel",
         buffer.getvalue(),
-        "deudas_pendientes.xlsx",
+        file_name="deudas.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
