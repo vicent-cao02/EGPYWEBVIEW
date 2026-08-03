@@ -1,0 +1,14 @@
+ source /Users/vicent/Story/EGPYWEBVIEW/.venv/bin/activate
+-- Asignar valor por defecto a cantidades nulas
+UPDATE productos SET cantidad = 0 WHERE cantidad IS NULL;
+
+-- Modificar columna cantidad a NOT NULL
+ALTER TABLE productos ALTER COLUMN cantidad SET NOT NULL;
+
+-- Añadir Foreign Key para categoria_id
+ALTER TABLE productos 
+ADD CONSTRAINT fk_productos_categoria 
+FOREIGN KEY (categoria_id) REFERENCES categorias(id);
+
+
+

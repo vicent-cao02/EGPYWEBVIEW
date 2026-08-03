@@ -1,8 +1,6 @@
 # pages/6_Usuarios.py
 import streamlit as st
-from backend.usuarios import (
-    listar_usuarios, crear_usuario, cambiar_rol, activar_usuario, desactivar_usuario, cambiar_password, obtener_logs_usuario, eliminar_usuario
-)
+from backend.controllers.usuarios_controller import UsuariosController
 import ui.error_handler as handle_app_error
 
 
@@ -25,7 +23,7 @@ if st.session_state.usuario["rol"] != "admin":
 # ----------------------------
 @st.cache_data(ttl=30)
 def cached_usuarios():
-    return listar_usuarios()    
+    return UsuariosController.listar_usuarios()
 
 try:
     usuarios = cached_usuarios()
@@ -33,7 +31,7 @@ try:
     # ---------------------------
     # Lista de usuarios con filtros
     # ---------------------------
-    usuarios = listar_usuarios()
+    usuarios = UsuariosController.listar_usuarios()
     st.subheader("🔎 Buscar y filtrar usuarios")
     col1, col2 = st.columns(2)
     with col1:
@@ -68,17 +66,17 @@ try:
                     )
                 with col4:
                     if st.button("💾 Guardar cambios", key=f"save_{u['username']}"):
-                        cambiar_rol(u["username"], nuevo_rol, actor=st.session_state.usuario["username"])
+                        UsuariosController.cambiar_rol(u["username"], nuevo_rol, actor=st.session_state.usuario["username"])
                         if nuevo_estado == "Activo" and not u["activo"]:
-                            activar_usuario(u["username"], actor=st.session_state.usuario["username"])
+                            UsuariosController.activar_usuario(u["username"], actor=st.session_state.usuario["username"])
                         elif nuevo_estado == "Inactivo" and u["activo"]:
-                            desactivar_usuario(u["username"], actor=st.session_state.usuario["username"])
+                            UsuariosController.desactivar_usuario(u["username"], actor=st.session_state.usuario["username"])
                         st.success("Cambios guardados")
                         st.rerun()
 
                 # Ver historial de acciones
                 if st.button("📜 Ver historial de acciones", key=f"log_{u['username']}"):
-                    logs = obtener_logs_usuario(u["username"])
+                    logs = UsuariosController.obtener_logs_usuario(u["username"])
                     if logs:
                         for log in logs:
                             st.write(f"{log['fecha']} - {log['accion']}: {log['detalles']}")
@@ -103,7 +101,7 @@ try:
                 st.error("Ingresa un nombre de usuario.")
             else:
                 try:
-                    crear_usuario(nuevo_user, nuevo_pass, nuevo_rol, actor=st.session_state.usuario["username"])
+                    UsuariosController.crear_usuario(nuevo_user, nuevo_pass, nuevo_rol, actor=st.session_state.usuario["username"])
                     st.success(f"Usuario '{nuevo_user}' creado ✅")
                     st.rerun()
                 except Exception as e:
@@ -123,7 +121,7 @@ try:
             if not new_pass.strip():
                 st.error("Ingresa una nueva contraseña.")
             else:
-                cambiar_password(seleccionado, new_pass, actor=st.session_state.usuario["username"])
+                UsuariosController.cambiar_password(seleccionado, new_pass, actor=st.session_state.usuario["username"])
                 st.success("Contraseña actualizada ✅")
                 st.rerun()
     else:
@@ -133,7 +131,7 @@ try:
     st.divider()
     usuario_a_eliminar = st.selectbox("Selecciona usuario a eliminar", usernames)
     if st.button("Eliminar usuario"):
-        eliminar_usuario(usuario_a_eliminar, actor=st.session_state.usuario["username"])
+        UsuariosController.eliminar_usuario(usuario_a_eliminar, actor=st.session_state.usuario["username"])
         st.success("Usuario eliminado ✅")
         st.rerun()
 except Exception as e:

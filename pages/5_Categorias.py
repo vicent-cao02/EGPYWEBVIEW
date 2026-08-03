@@ -1,7 +1,8 @@
 # pages/5_Categorias.py
 import streamlit as st
 import pandas as pd
-from backend import categorias, productos
+from backend.controllers.categorias_controller import CategoriasController
+from backend import productos
 import ui.error_handler as handle_app_error
 
 
@@ -12,9 +13,10 @@ import ui.error_handler as handle_app_error
 if "usuario" not in st.session_state or st.session_state.usuario is None:
     st.warning("Debes iniciar sesión para acceder a esta página.")
     st.stop()
-    if st.session_state.usuario["rol"] != "admin":
-        st.error("Solo usuarios con rol admin pueden acceder.")
-        st.stop()
+
+if st.session_state.usuario["rol"] != "admin":
+    st.error("Solo usuarios con rol admin pueden acceder.")
+    st.stop()
 
 usuario_actual = st.session_state.usuario["username"]
 
@@ -24,7 +26,7 @@ usuario_actual = st.session_state.usuario["username"]
 # ---------------------------
 @st.cache_data(ttl=30)
 def cargar_categorias():
-    return categorias.list_categories()
+    return CategoriasController.list_categories()
 
 @st.cache_data(ttl=30)
 def cargar_productos():
@@ -84,7 +86,7 @@ try:
 
         if crear:
             if nuevo_nombre.strip():
-                categorias.agregar_categoria(nuevo_nombre.strip(), usuario=usuario_actual)
+                CategoriasController.agregar_categoria(nuevo_nombre.strip(), usuario=usuario_actual)
                 st.success(f"Categoría '{nuevo_nombre}' creada correctamente ✅")
                 st.cache_data.clear()
                 st.rerun()
@@ -93,7 +95,7 @@ try:
 
         if actualizar:
             if nuevo_nombre.strip() and categoria_actual:
-                categorias.editar_categoria(categoria_actual["id"], nuevo_nombre.strip(), usuario=usuario_actual)
+                CategoriasController.editar_categoria(categoria_actual["id"], nuevo_nombre.strip(), usuario=usuario_actual)
                 st.success(f"Categoría actualizada a '{nuevo_nombre}' ✅")
                 st.cache_data.clear()
                 st.rerun()
@@ -117,7 +119,7 @@ try:
             confirmar = st.checkbox(f"Sí, quiero eliminar '{categoria_actual['nombre']}'")
             if confirmar and st.button("Eliminar definitivamente"):
                 try:
-                    categorias.eliminar_categoria(categoria_actual["id"], usuario=usuario_actual)
+                    CategoriasController.eliminar_categoria(categoria_actual["id"], usuario=usuario_actual)
                     st.success(f"Categoría '{categoria_actual['nombre']}' eliminada correctamente ✅")
                     st.cache_data.clear()
                     st.rerun()

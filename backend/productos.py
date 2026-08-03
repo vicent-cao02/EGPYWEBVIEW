@@ -1,80 +1,43 @@
-# backend/productos.py
+from typing import Dict, Any, List, Optional
 
-from typing import List, Dict, Any, Optional
-from .db import get_connection
-from .logs import registrar_log
+from backend.logs import registrar_log
+from backend.repositories.productos_repository import ProductosRepository
+
+repo = ProductosRepository()
 
 
-# ---------------------------
-# LISTAR PRODUCTOS
-# ---------------------------
 def list_products() -> List[Dict[str, Any]]:
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM productos ORDER BY nombre")
-        return [dict(row) for row in cursor.fetchall()]
-    finally:
-        conn.close()
+    return repo.obtener_todos()
 
 
 def get_product(producto_id: int) -> Optional[Dict[str, Any]]:
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM productos WHERE id = ?", (producto_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
+    return repo.obtener_por_id(producto_id)
 
 
-# ---------------------------
-# CREAR PRODUCTO
-# ---------------------------
 def crear_producto(
     nombre: str,
     precio: float,
     cantidad: int,
     categoria_id: int,
     usuario: Optional[str] = None
-) -> dict:
-
-    nombre = nombre.strip()
-    if not nombre:
-        raise ValueError("El nombre no puede estar vacío")
-
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-
-        # Validar duplicado
-        cursor.execute("SELECT id FROM productos WHERE LOWER(nombre) = LOWER(?)", (nombre,))
-        if cursor.fetchone():
-            raise ValueError("Ya existe un producto con ese nombre")
-
-        cursor.execute("""
-            INSERT INTO productos (nombre, precio, cantidad, categoria_id)
-            VALUES (?, ?, ?, ?)
-        """, (nombre, precio, cantidad, categoria_id))
-
-        conn.commit()
-
-        cursor.execute("SELECT * FROM productos WHERE id = last_insert_rowid()")
-        nuevo = dict(cursor.fetchone())
-
-        if usuario:
-            registrar_log(usuario, "crear_producto", nuevo)
-
-        return nuevo
-
-    finally:
-        conn.close()
+) -> Dict[str, Any]:
+    producto_id = repo.crear(nombre, precio, cantidad, categoria_id)
+    producto = repo.obtener_por_id(producto_id)
+    if usuario and producto:
+        registrar_log(usuario, "crear_producto", producto)
+    return producto
 
 
-# ---------------------------
-# EDITAR PRODUCTO
-# ---------------------------
+def guardar_producto(
+    nombre: str,
+    precio: float,
+    cantidad: int,
+    categoria_id: int,
+    usuario: Optional[str] = None
+) -> Dict[str, Any]:
+    return crear_producto(nombre, precio, cantidad, categoria_id, usuario)
+
+
 def editar_producto(
     producto_id: int,
     nombre: str,
@@ -82,122 +45,49 @@ def editar_producto(
     cantidad: int,
     categoria_id: int,
     usuario: Optional[str] = None
-) -> dict:
-
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-
-        # Validar duplicado (excluyendo el actual)
-        cursor.execute("""
-            SELECT id FROM productos 
-            WHERE LOWER(nombre) = LOWER(?) AND id != ?
-        """, (nombre, producto_id))
-
-        if cursor.fetchone():
-            raise ValueError("Ya existe otro producto con ese nombre")
-
-        cursor.execute("""
-            UPDATE productos
-            SET nombre = ?, precio = ?, cantidad = ?, categoria_id = ?
-            WHERE id = ?
-        """, (nombre, precio, cantidad, categoria_id, producto_id))
-
-        conn.commit()
-
-        producto = get_product(producto_id)
-
-        if usuario:
-            registrar_log(usuario, "editar_producto", producto)
-
-        return producto
-
-    finally:
-        conn.close()
+) -> Dict[str, Any]:
+    producto = repo.actualizar(producto_id, nombre, precio, cantidad, categoria_id)
+    if usuario and producto:
+        registrar_log(usuario, "editar_producto", producto)
+    return producto
 
 
-# ---------------------------
-# ELIMINAR PRODUCTO (ÚNICO)
-# ---------------------------
 def eliminar_producto(producto_id: int, usuario: Optional[str] = None) -> bool:
-
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM productos WHERE id = ?", (producto_id,))
-        producto = cursor.fetchone()
-
-        if not producto:
-            return False
-
-        cursor.execute("DELETE FROM productos WHERE id = ?", (producto_id,))
-        conn.commit()
-
-        if usuario:
-            registrar_log(usuario, "eliminar_producto", dict(producto))
-
-        return True
-
-    finally:
-        conn.close()
+    producto = repo.obtener_por_id(producto_id)
+    if not producto:
+        return False
+    ok = repo.eliminar(producto_id)
+    if usuario:
+        registrar_log(usuario, "eliminar_producto", producto)
+    return ok
 
 
-# ---------------------------
-# AJUSTAR STOCK
-# ---------------------------
-def adjust_stock(product_id: int, cantidad_delta: int, usuario=None) -> dict:
+def adjust_stock(product_id: int, cantidad_delta: int, usuario=None) -> Dict[str, Any]:
+    producto = repo.obtener_por_id(product_id)
+    if not producto:
+        raise ValueError("Producto no encontrado")
 
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
+    nuevo_stock = producto["cantidad"] + cantidad_delta
+    if nuevo_stock < 0:
+        raise ValueError("Stock insuficiente")
 
-        cursor.execute("SELECT * FROM productos WHERE id = ?", (product_id,))
-        prod = cursor.fetchone()
+    repo.actualizar_stock(product_id, nuevo_stock)
+    producto["cantidad"] = nuevo_stock
 
-        if not prod:
-            raise ValueError("Producto no encontrado")
+    if usuario:
+        registrar_log(usuario, "ajustar_stock", {
+            "producto_id": product_id,
+            "antes": producto["cantidad"] - cantidad_delta,
+            "despues": nuevo_stock,
+            "delta": cantidad_delta
+        })
 
-        prod = dict(prod)
-        nuevo_stock = prod["cantidad"] + cantidad_delta
-
-        if nuevo_stock < 0:
-            raise ValueError("Stock insuficiente")
-
-        cursor.execute(
-            "UPDATE productos SET cantidad = ? WHERE id = ?",
-            (nuevo_stock, product_id)
-        )
-
-        conn.commit()
-
-        prod["cantidad"] = nuevo_stock
-
-        if usuario:
-            registrar_log(usuario, "ajustar_stock", {
-                "producto_id": product_id,
-                "antes": prod["cantidad"] - cantidad_delta,
-                "despues": nuevo_stock,
-                "delta": cantidad_delta
-            })
-
-        return prod
-
-    finally:
-        conn.close()
+    return producto
 
 
-# ---------------------------
-# INCREMENTAR STOCK (usa adjust_stock)
-# ---------------------------
 def increment_stock(producto_id: int, cantidad: int, usuario=None):
     return adjust_stock(producto_id, cantidad, usuario)
 
 
 def map_productos():
-    productos = list_products()  # o tu función real
-
-    return {
-        p["id"]: p["nombre"]
-        for p in productos
-    }
+    return {p["id"]: p["nombre"] for p in list_products()}

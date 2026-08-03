@@ -111,6 +111,7 @@ class VentasService:
                 "total": total,
                 "tipo_pago": tipo_pago,
                 "usuario": usuario,
+                "detalle_productos": productos_final,
             })
 
             if saldo > 0:
@@ -121,14 +122,7 @@ class VentasService:
                     productos=productos_final,
                 )
 
-                uow.conn.execute(
-                    """
-                    UPDATE clientes
-                    SET deuda_total = deuda_total + ?
-                    WHERE id = ?
-                    """,
-                    (saldo, cliente_id),
-                )
+                uow.clientes.actualizar_deuda_total(cliente_id, saldo)
 
             registrar_log_con_conn(
                 usuario,
@@ -142,6 +136,40 @@ class VentasService:
                 },
                 conn=uow.conn,
             )
+
+            # ==========================
+            # Registro contable
+            # Debe: Caja (por lo pagado) y/o Clientes (por saldo)
+            # Haber: Ventas (por el total)
+            # ==========================
+
+            try:
+                from backend.services.contabilidad_service import registrar_asiento_con_conn, ensure_default_accounts
+
+                # asegurar cuentas básicas
+                ensure_default_accounts(uow.conn)
+
+                movimientos = []
+
+                if pagado and pagado > 0:
+                    movimientos.append({"codigo": "1.1.1", "debe": pagado, "descripcion": f"Cobro venta {venta_id}"})
+
+                if saldo and saldo > 0:
+                    movimientos.append({"codigo": "1.1.2", "debe": saldo, "descripcion": f"Cuenta por cobrar venta {venta_id}"})
+
+                # Haber ventas por el total
+                movimientos.append({"codigo": "4.1.1", "haber": total, "descripcion": f"Venta {venta_id}"})
+
+                registrar_asiento_con_conn(
+                    uow.conn,
+                    descripcion=f"Venta #{venta_id}",
+                    referencia=str(venta_id),
+                    usuario=usuario,
+                    movimientos=movimientos,
+                )
+            except Exception:
+                # No queremos que un fallo contable rompa la venta; loguear y seguir
+                pass
 
             return {
                 "id": venta_id,

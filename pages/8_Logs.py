@@ -2,8 +2,8 @@
 import streamlit as st
 import pandas as pd
 import io
-from backend.db import get_connection
 from backend import productos
+from backend.controllers.logs_controller import LogsController
 
 st.set_page_config(page_title="🧾 Auditoría del Sistema", layout="wide")
 st.title("🧾 Auditoría del Sistema")
@@ -23,25 +23,10 @@ if st.session_state.usuario["rol"] != "admin":
 # ---------------------------
 @st.cache_data(ttl=30)
 def cargar_auditoria():
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 
-                id,
-                accion,
-                producto_id,
-                usuario,
-                fecha
-            FROM auditoria
-            ORDER BY fecha DESC
-        """)
-        rows = cursor.fetchall()
-        result = [dict(row) for row in rows]
-    finally:
-        conn.close()
-    
-    df = pd.DataFrame(result)
+    rows = LogsController.listar_auditoria(limit=1000)
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
     df["fecha_str"] = df["fecha"].dt.strftime("%Y-%m-%d %H:%M:%S")
     return df

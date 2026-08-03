@@ -9,7 +9,7 @@ from .usuarios import (
 
 from .productos import (
     list_products, get_product,
-    adjust_stock, eliminar_producto, editar_producto
+    adjust_stock, eliminar_producto, editar_producto, guardar_producto
 )
 
 from .clientes import (
@@ -20,6 +20,10 @@ from .clientes import (
 from .ventas import (
     list_sales, get_sale, delete_sale,
     register_sale, listar_ventas_dict, editar_venta_extra
+)
+
+from .contabilidad import (
+    registrar_asiento, libro_diario, mayor_general, balance_general, estado_resultados
 )
 
 from .deudas import (
