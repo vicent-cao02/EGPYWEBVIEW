@@ -1,5 +1,5 @@
 # Permite importar módulos desde backend
-from .db import get_connection
+from .database import Database, db, get_connection
 
 from .usuarios import (
     crear_usuario, autenticar_usuario, cambiar_password,

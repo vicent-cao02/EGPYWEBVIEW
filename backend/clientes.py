@@ -2,6 +2,7 @@ from typing import Dict, Any, Optional
 from .db import get_connection
 from .logs import registrar_log
 
+
 def get_client(cliente_id: str) -> Optional[Dict[str, Any]]:
     """Obtiene un cliente por ID"""
     conn = get_connection()
@@ -113,25 +114,34 @@ def delete_client(cliente_id: str, usuario: str = "sistema") -> bool:
         registrar_log(usuario, "error_delete_client", {"id": cliente_id, "error": str(e)})
         raise
 
-def update_debt(cliente_id: str, monto: float, usuario: str = "sistema") -> Dict[str, Any]:
+def update_debt(cliente_id: str, monto: float, usuario: str = "sistema", conn=None) -> Dict[str, Any]:
     """Actualiza la deuda del cliente de manera segura"""
-    try:
+    owns_connection = conn is None
+    if owns_connection:
         conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE clientes
-                SET deuda_total = MAX(deuda_total + ?, 0)
-                WHERE id = ?
-            """, (monto, cliente_id))
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE clientes
+            SET deuda_total = MAX(deuda_total + ?, 0)
+            WHERE id = ?
+        """, (monto, cliente_id))
+
+        if owns_connection:
             conn.commit()
-        finally:
+
+    finally:
+        if owns_connection:
             conn.close()
-        registrar_log(usuario, "update_debt", {"id": cliente_id, "monto": monto})
+
+    registrar_log(usuario, "update_debt", {"id": cliente_id, "monto": monto})
+
+    if owns_connection:
         return get_client(cliente_id)
-    except Exception as e:
-        registrar_log(usuario, "error_update_debt", {"id": cliente_id, "monto": monto, "error": str(e)})
-        raise
+
+    return {"id": cliente_id, "deuda_total": None}
+
 
 def list_clients() -> list[Dict[str, Any]]:
     """Lista todos los clientes con campos esenciales"""

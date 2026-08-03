@@ -2,6 +2,12 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from backend import productos, clientes, ventas, deudas, usuarios
+from backend.migraciones import ejecutar_migraciones
+from backend.session import init_session
+
+init_session()
+
+ejecutar_migraciones()
 
 # =====================================================
 # CONFIGURACIÓN GENERAL

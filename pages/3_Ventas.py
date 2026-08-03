@@ -8,7 +8,8 @@ import platform
 
 from pathlib import Path
 from backend import productos, clientes, ventas
-from backend.deudas import add_debt
+from backend.services.ventas_service import VentasService
+from backend.session import init_session
 
 
 # =========================================================
@@ -22,6 +23,8 @@ st.set_page_config(
 # =========================================================
 # VALIDAR SESIÓN
 # =========================================================
+init_session()
+
 if "usuario" not in st.session_state or st.session_state.usuario is None:
     st.warning("Debes iniciar sesión para acceder a esta página.")
     st.stop()
@@ -85,7 +88,7 @@ if "venta_ok" not in st.session_state:
 # =========================================================
 # MENSAJES
 # =========================================================
-if st.session_state["venta_ok"]:
+if st.session_state.get("venta_ok"):
     st.success("✅ Venta registrada correctamente.")
     st.session_state["venta_ok"] = False
 
@@ -336,7 +339,7 @@ if st.session_state["items_venta"]:
                         else 0.0
                     )
 
-                    nueva_venta = ventas.register_sale(
+                    nueva_venta = VentasService.registrar_venta(
                         cliente_id=cliente_id,
                         productos=st.session_state["items_venta"],
                         total=float(total),
@@ -345,26 +348,9 @@ if st.session_state["items_venta"]:
                         tipo_pago=tipo_pago
                     )
 
-                    # =====================================
-                    # CREAR DEUDA
-                    # =====================================
-                    if pago_estado == "Pendiente":
-
-                        saldo_pendiente = (
-                            float(total) - monto_pagado
-                        )
-
-                        add_debt(
-                            cliente_id=cliente_id,
-                            monto_total=saldo_pendiente,
-                            venta_id=nueva_venta["id"],
-                            productos=st.session_state["items_venta"],
-                            usuario=usuario_actual,
-                            estado="pendiente"
-                        )
-
+                    if nueva_venta.get("saldo", 0) > 0:
                         st.info(
-                            f"Deuda creada: {format_money(saldo_pendiente)}"
+                            f"Deuda creada: {format_money(nueva_venta['saldo'])}"
                         )
 
                     # =====================================
@@ -372,6 +358,7 @@ if st.session_state["items_venta"]:
                     # =====================================
                     cached_products.clear()
                     cached_sales.clear()
+                    st.cache_data.clear()
 
                     # =====================================
                     # LIMPIAR ORDEN

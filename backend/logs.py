@@ -13,11 +13,9 @@ def registrar_log(usuario: str, accion: str, detalles):
     Convierte dict o list a JSON string antes de guardar.
     """
 
-    # Convertir detalles a JSON si es dict o list
     if isinstance(detalles, (dict, list)):
         detalles = json.dumps(detalles, default=str)
 
-    # Asegurar que usuario sea string
     if isinstance(usuario, dict):
         usuario = usuario.get("username", "sistema")
 
@@ -33,6 +31,38 @@ def registrar_log(usuario: str, accion: str, detalles):
         conn.commit()
     finally:
         conn.close()
+
+def registrar_log_con_conn(usuario: str, accion: str, detalles, conn=None):
+    if isinstance(detalles, (dict, list)):
+        detalles = json.dumps(detalles, default=str)
+
+    if isinstance(usuario, dict):
+        usuario = usuario.get("username", "sistema")
+
+    fecha = datetime.now()
+
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    else:
+        close_conn = False
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO logs (usuario, accion, detalles, fecha)
+            VALUES (?, ?, ?, ?)
+            """,
+            (usuario, accion, detalles, fecha),
+        )
+        if close_conn:
+            conn.commit()
+    finally:
+        if close_conn:
+            conn.close()
+
+    return True
 
 # ---------------------------
 # Listar todos los logs

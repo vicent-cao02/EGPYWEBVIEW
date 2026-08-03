@@ -184,6 +184,8 @@ def add_debt(
                     "pendiente"
                 ))
 
+        update_debt(cliente_id, float(monto_total), usuario=usuario or "sistema", conn=conn)
+
         conn.commit()
 
     except Exception:
@@ -192,8 +194,6 @@ def add_debt(
 
     finally:
         conn.close()
-
-    update_debt(cliente_id, float(monto_total))
 
     return deuda_id
 
@@ -294,44 +294,23 @@ def pay_debt_producto(
             deuda_id
         ))
 
-        conn.commit()
+        update_debt(deuda["cliente_id"], -float(monto_pago), usuario=usuario or "sistema", conn=conn)
 
-    except Exception:
-        conn.rollback()
-        raise
+        # ======================================================
+        # ACTUALIZAR VENTA SI SE PAGÓ COMPLETA
+        # ======================================================
+        venta_id = deuda.get("venta_id")
 
-    finally:
-        conn.close()
+        if venta_id:
 
-    # ======================================================
-    # ACTUALIZAR DEUDA CLIENTE
-    # ======================================================
-    update_debt(
-        deuda["cliente_id"],
-        -float(monto_pago)
-    )
+            venta = get_sale(venta_id)
 
-    # ======================================================
-    # ACTUALIZAR VENTA SI SE PAGÓ COMPLETA
-    # ======================================================
-    venta_id = deuda.get("venta_id")
+            if venta:
 
-    if venta_id:
-
-        venta = get_sale(venta_id)
-
-        if venta:
-
-            nuevo_pagado = (
-                float(venta["total"])
-                - float(restante)
-            )
-
-            conn = get_connection()
-
-            try:
-
-                cursor = conn.cursor()
+                nuevo_pagado = (
+                    float(venta["total"])
+                    - float(restante)
+                )
 
                 cursor.execute("""
                     UPDATE ventas
@@ -344,10 +323,14 @@ def pay_debt_producto(
                     venta_id
                 ))
 
-                conn.commit()
+        conn.commit()
 
-            finally:
-                conn.close()
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
 
     return True
 
@@ -617,87 +600,39 @@ def generar_factura_pago_deuda(
 
         c.setFont("Helvetica", 10)
 
-        c.drawString(
-            40,
-            current_y,
-            f"Fecha: {fecha_pago}"
-        )
+        c.drawString(40, current_y, f"Cliente: {cliente.get('nombre', '')}")
+        c.drawString(40, current_y - 15, f"Fecha: {fecha_pago}")
+        c.drawString(40, current_y - 30, f"Usuario: {usuario}")
 
-        current_y -= 20
+        if observaciones:
+            c.drawString(40, current_y - 45, f"Observaciones: {observaciones}")
 
-        c.drawString(
-            40,
-            current_y,
-            f"Cliente: {cliente.get('nombre', '')}"
-        )
-
-        current_y -= 15
-
-        c.drawString(
-            40,
-            current_y,
-            f"CI: {cliente.get('ci', '')}"
-        )
-
-        current_y -= 25
-
-        table_data = [[
-            "Producto",
-            "Cantidad",
-            "Precio",
-            "Total"
-        ]]
-
-        total = 0
-
+        items = []
         for p in productos_pagados:
-
-            subtotal = (
-                float(p["cantidad"])
-                * float(p["precio_unitario"])
-            )
-
-            total += subtotal
-
-            table_data.append([
-                p["nombre"],
-                str(p["cantidad"]),
-                f"${float(p['precio_unitario']):.2f}",
-                f"${subtotal:.2f}"
+            items.append([
+                p.get("nombre", "Producto"),
+                p.get("cantidad", 0),
+                p.get("precio_unitario", 0),
+                p.get("cantidad", 0) * p.get("precio_unitario", 0)
             ])
 
-        table_data.append([
-            "",
-            "",
-            "TOTAL",
-            f"${total:.2f}"
-        ])
+        table_data = [["Producto", "Cantidad", "Precio", "Subtotal"]]
+        table_data.extend(items)
 
-        table = Table(
-            table_data,
-            colWidths=[200, 80, 100, 100]
-        )
-
+        table = Table(table_data, colWidths=[220, 70, 70, 70])
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.gray),
-            ('TEXTCOLOR',(0,0),(-1,0),colors.white),
-            ('GRID', (0,0), (-1,-1), 1, colors.black),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.grey),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold")
         ]))
 
-        table.wrapOn(c, width, height)
+        table.wrapOn(c, 0, 0)
+        table.drawOn(c, 40, current_y - 120)
 
-        table.drawOn(
-            c,
-            40,
-            current_y - len(table_data)*20
-        )
+        c.showPage()
 
-    draw(0)
-
-    c.showPage()
+    draw()
     c.save()
-
-    buffer.seek(0)
-
     return buffer.getvalue()

@@ -11,11 +11,14 @@ import platform
 from pathlib import Path
 from backend import clientes, productos, deudas
 from backend.deudas import generar_factura_pago_deuda
+from backend.session import init_session
 
 
 # =========================================================
 # 🔐 VALIDACIÓN DE SESIÓN
 # =========================================================
+init_session()
+
 if "usuario" not in st.session_state or not st.session_state.usuario:
     st.warning("Debes iniciar sesión para acceder.")
     st.stop()
@@ -31,26 +34,31 @@ if "refresh" not in st.session_state:
 # =========================================================
 # ⚡ CACHÉ
 # =========================================================
-@st.cache_data(ttl=60)
 def load_clientes_con_deuda():
     return deudas.list_clientes_con_deuda() or []
 
-@st.cache_data(ttl=60)
-def load_productos_map():
-    return productos.map_productos() or {}
 
-@st.cache_data(ttl=60)
+def load_productos_map():
+    return productos.map_productos() or []
+
+
 def load_deudas_cliente(cid: int):
     return deudas.debts_by_client(cid) or []
 
-@st.cache_data(ttl=60)
+
 def load_detalle_deudas():
     return deudas.list_detalle_deudas() or []
 
-@st.cache_data(ttl=60)
+
 def load_clientes_dict():
     lista = clientes.list_clients() or []
     return {c["id"]: c["nombre"] for c in lista}
+
+
+# =========================================================
+# ⚠️ FORZAR DATOS FRESCOS
+# =========================================================
+st.cache_data.clear()
 
 
 # =========================================================
@@ -67,7 +75,7 @@ st.title("💳 Gestión de Deudas")
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).parent
 else:
-    BASE_DIR = Path(__file__).resolve().parent
+    BASE_DIR = Path(__file__).resolve().parents[1]
 
 EXPORTS_DIR = BASE_DIR / "exports"
 
@@ -124,7 +132,7 @@ if seleccion_cliente:
             precio = float(det.get("precio_unitario") or 0)
 
             filas.append({
-                "deuda_id": deuda.get("deuda_id"),
+                "deuda_id": deuda.get("id") or deuda.get("deuda_id"),
                 "detalle_id": det.get("id"),
                 "producto_id": det.get("producto_id"),
                 "producto": productos_map.get(det.get("producto_id"), "Producto"),
@@ -224,6 +232,14 @@ if seleccion_cliente:
                     with open(pdf_path, "wb") as f:
                         f.write(pdf)
 
+                    st.session_state.setdefault("comprobantes", []).append({
+                        "tipo": "pago_deuda",
+                        "cliente": cliente_obj.get("nombre"),
+                        "archivo": pdf_filename,
+                        "ruta": str(pdf_path),
+                        "fecha": timestamp,
+                    })
+
                     st.success("✅ Comprobante PDF guardado correctamente")
 
                     st.info(f"📁 {pdf_path}")
@@ -265,59 +281,12 @@ if seleccion_cliente:
 st.divider()
 st.subheader("Comprobantes generados")
 
+comprobantes = st.session_state.get("comprobantes", [])
 
-if st.session_state.comprobantes:
+if comprobantes:
 
-    for pdf in reversed(st.session_state.comprobantes):
-
-        if st.button("📥 Generar Excel"):
-
-            try:
-
-                timestamp = datetime.datetime.now().strftime(
-                    "%Y%m%d_%H%M%S"
-                )
-
-                excel_filename = (
-                    f"Deudas_{timestamp}.xlsx"
-                )
-
-                excel_path = EXCEL_DIR / excel_filename
-
-                with open(excel_path, "wb") as f:
-                    f.write(buffer.getvalue())
-
-                st.success("✅ Excel generado correctamente")
-
-                st.info(f"📁 {excel_path}")
-
-                # =============================================
-                # 🚀 ABRIR AUTOMÁTICAMENTE
-                # =============================================
-
-                sistema = platform.system()
-
-                if sistema == "Windows":
-
-                    os.startfile(excel_path)
-
-                elif sistema == "Darwin":
-
-                    subprocess.call([
-                        "open",
-                        str(excel_path)
-                    ])
-
-                else:
-
-                    subprocess.call([
-                        "xdg-open",
-                        str(excel_path)
-                    ])
-
-            except Exception as e:
-
-                st.error(f"Error generando Excel: {str(e)}")
+    for comprobante in reversed(comprobantes):
+        st.write(f"- {comprobante.get('archivo', 'Comprobante')} ({comprobante.get('fecha', '')})")
 
 else:
     st.info("No hay comprobantes generados.")
