@@ -107,7 +107,7 @@ class InventarioRepository:
         if producto_id:
             return db.fetchall(
                 """
-                SELECT ie.*, p.nombre, p.quantidade
+                SELECT ie.*, p.nombre, p.cantidad
                 FROM inventario_entradas ie
                 JOIN productos p ON ie.producto_id = p.id
                 WHERE ie.producto_id = ?

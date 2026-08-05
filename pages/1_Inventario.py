@@ -75,8 +75,8 @@ try:
                 "ID": p["id"],
                 "Nombre": p["nombre"],
                 "Categoría": cat_id_to_name.get(p.get("categoria_id"), ""),
-                "Cantidad": p.get("cantidad", 0),
-                "Precio": p.get("precio", 0.0),
+                "Cantidad": int(p.get("cantidad", 0)),
+                "Precio": float(p.get("precio", 0.0)),
             } for p in prods
         ])
         return df
@@ -245,8 +245,13 @@ try:
 
     with col1:
         if st.button("📥 Generar y descargar Excel"):
-
-            excel_df = build_df(productos_lista)
+            excel_df = pd.DataFrame([
+                {
+                    "Nombre": p["nombre"],
+                    "Cantidad": int(p.get("cantidad", 0)),
+                }
+                for p in productos_lista
+            ])
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             nombre_archivo = f"inventario_{timestamp}.xlsx"

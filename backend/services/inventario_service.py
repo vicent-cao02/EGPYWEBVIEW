@@ -416,6 +416,40 @@ def obtener_kardex_completo() -> Dict:
     except Exception as e:
         return {"error": str(e), "movimientos": []}
 
+def obtener_entradas(producto_id: Optional[int] = None, limite: int = 100) -> Dict:
+    """Obtiene las entradas de inventario."""
+    try:
+        entradas = inv_repo.obtener_entradas(producto_id, limite)
+        return {"entradas": entradas, "total": len(entradas)}
+    except Exception as e:
+        return {"error": str(e), "entradas": []}
+
+
+def obtener_salidas(producto_id: Optional[int] = None, limite: int = 100) -> Dict:
+    """Obtiene las salidas de inventario."""
+    try:
+        salidas = inv_repo.obtener_salidas(producto_id, limite)
+        return {"salidas": salidas, "total": len(salidas)}
+    except Exception as e:
+        return {"error": str(e), "salidas": []}
+
+
+def obtener_ajustes(producto_id: Optional[int] = None, limite: int = 100) -> Dict:
+    """Obtiene los ajustes de inventario."""
+    try:
+        ajustes = inv_repo.obtener_ajustes(producto_id, limite)
+        return {"ajustes": ajustes, "total": len(ajustes)}
+    except Exception as e:
+        return {"error": str(e), "ajustes": []}
+
+
+def obtener_config(producto_id: int) -> Dict:
+    """Obtiene la configuración de inventario para un producto."""
+    try:
+        config = inv_repo.obtener_config_inventario(producto_id)
+        return {"config": config} if config else {"config": None}
+    except Exception as e:
+        return {"error": str(e), "config": None}
 
 def obtener_resumen_inventario() -> Dict:
     """Obtiene un resumen del estado general del inventario."""

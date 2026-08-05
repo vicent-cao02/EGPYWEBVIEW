@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional
 
 from backend.logs import registrar_log
 from backend.repositories.productos_repository import ProductosRepository
+from backend.services.inventario_service import registrar_entrada, registrar_ajuste
 
 repo = ProductosRepository()
 
@@ -21,10 +22,22 @@ def crear_producto(
     categoria_id: int,
     usuario: Optional[str] = None
 ) -> Dict[str, Any]:
-    producto_id = repo.crear(nombre, precio, cantidad, categoria_id)
+    producto_id = repo.crear(nombre, precio, 0, categoria_id)
     producto = repo.obtener_por_id(producto_id)
     if usuario and producto:
         registrar_log(usuario, "crear_producto", producto)
+
+    if cantidad and cantidad > 0:
+        registrar_entrada(
+            producto_id=producto_id,
+            cantidad=cantidad,
+            precio_unitario=precio,
+            proveedor="Entrada inicial",
+            numero_compra="INICIAL",
+            usuario=usuario,
+            observaciones="Entrada inicial al crear producto"
+        )
+
     return producto
 
 
@@ -46,7 +59,23 @@ def editar_producto(
     categoria_id: int,
     usuario: Optional[str] = None
 ) -> Dict[str, Any]:
-    producto = repo.actualizar(producto_id, nombre, precio, cantidad, categoria_id)
+    producto_actual = repo.obtener_por_id(producto_id)
+    if not producto_actual:
+        raise ValueError("Producto no encontrado")
+
+    stock_actual = producto_actual["cantidad"]
+    producto = repo.actualizar(producto_id, nombre, precio, stock_actual, categoria_id)
+
+    if cantidad != stock_actual:
+        registrar_ajuste(
+            producto_id=producto_id,
+            cantidad_nueva=cantidad,
+            razon="Ajuste por edición de producto",
+            usuario=usuario,
+            observaciones="Ajuste generado desde edición de producto"
+        )
+
+    producto = repo.obtener_por_id(producto_id)
     if usuario and producto:
         registrar_log(usuario, "editar_producto", producto)
     return producto
